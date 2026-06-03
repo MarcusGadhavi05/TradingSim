@@ -66,6 +66,7 @@ class SimSession:
             out.append({
                 "id":       c.contract_id,
                 "label":    c.label,
+                "subtitle": c.subtitle,
                 "type":     c.option_type,
                 "strike":   c.strike,
                 "premium":  price_contract(c, spot),

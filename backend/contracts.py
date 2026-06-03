@@ -1,15 +1,15 @@
 """
 The friendly contract menu.
 
-For each of the 12 underlyings we offer 4 contracts:
-  - Bullish call (slightly out-of-the-money call)
-  - Bearish put  (slightly out-of-the-money put)
-  - Lottery call (deep OTM call, cheap, big payoff if it rips)
-  - Hedge put    (deep OTM put, cheap protection)
+For each of the 12 underlyings we offer 5 contracts:
+  - ATM Call (slightly out-of-the-money call)
+  - ATM Put  (slightly out-of-the-money put)
+  - OTM Call (deep OTM call, cheap, big payoff if it rips)
+  - OTM Put  (deep OTM put, cheap protection)
+  - 1M Future (linear delta-1 exposure)
 
-The user sees friendly labels. Strikes are derived from the spot at
-the start of the sim. Pricing is Black-Scholes with a fixed IV per
-instrument.
+The user sees professional labels. Strikes are derived from the spot at
+the start of the sim. Pricing is Black-Scholes for options.
 """
 
 from dataclasses import dataclass
@@ -42,8 +42,9 @@ R = 0.045  # risk-free rate, ~ Fed funds in spring 2025
 class Contract:
     contract_id: str          # e.g. "SPY_bullish"
     underlying:  str          # e.g. "SPY"
-    label:       str          # e.g. "SPY Bullish (high conviction)"
-    option_type: str          # "call" or "put"
+    label:       str          # e.g. "SPY 1M Call @ 586.50"
+    subtitle:    str          # e.g. "ATM Call"
+    option_type: str          # "call", "put", or "future"
     strike:      float
     iv:          float
 
@@ -68,29 +69,44 @@ def black_scholes(spot: float, strike: float, t: float, r: float,
     return strike * exp(-r * t) * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
 
 
+def _fmt_strike(ticker: str, strike: float) -> str:
+    if "=X" in ticker:
+        return f"{strike:.4f}"
+    if strike >= 1000:
+        return f"{strike:.1f}"
+    return f"{strike:.2f}"
+
+
 def build_menu(initial_spots: dict[str, float]) -> list[Contract]:
-    """Build the 48-contract menu from initial spot prices."""
+    """Build the 60-contract menu from initial spot prices."""
     contracts: list[Contract] = []
     for ticker, spot in initial_spots.items():
         iv = DEFAULT_IV.get(ticker, 0.25)
-        contracts.extend([
-            Contract(f"{ticker}_bullish", ticker,
-                     f"{ticker} Bullish (high conviction)",
-                     "call", spot * 1.02, iv),
-            Contract(f"{ticker}_bearish", ticker,
-                     f"{ticker} Bearish (high conviction)",
-                     "put",  spot * 0.98, iv),
-            Contract(f"{ticker}_lottery", ticker,
-                     f"{ticker} Lottery (cheap upside)",
-                     "call", spot * 1.10, iv),
-            Contract(f"{ticker}_hedge",   ticker,
-                     f"{ticker} Hedge (cheap downside)",
-                     "put",  spot * 0.90, iv),
-        ])
+        
+        # Options
+        kinds = [
+            ("bullish", "call", spot * 1.02, "ATM Call"),
+            ("bearish", "put",  spot * 0.98, "ATM Put"),
+            ("lottery", "call", spot * 1.10, "OTM Call"),
+            ("hedge",   "put",  spot * 0.90, "OTM Put"),
+        ]
+        
+        for suffix, otype, strike, sub in kinds:
+            label = f"{ticker} 1M {'Call' if otype == 'call' else 'Put'} @ {_fmt_strike(ticker, strike)}"
+            contracts.append(Contract(
+                f"{ticker}_{suffix}", ticker, label, sub, otype, strike, iv
+            ))
+            
+        # Future
+        contracts.append(Contract(
+            f"{ticker}_future", ticker, f"{ticker} 1M Future", "1-Month Future", "future", spot, 0.0
+        ))
     return contracts
 
 
 def price_contract(contract: Contract, spot: float) -> float:
+    if contract.option_type == "future":
+        return spot
     return black_scholes(
         spot=spot, strike=contract.strike,
         t=T_YEARS, r=R, iv=contract.iv,

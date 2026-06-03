@@ -1,10 +1,39 @@
-﻿"use client";
+"use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import {
+  Card,
+  Metric,
+  Text,
+  Badge,
+  BadgeDelta,
+  Table,
+  TableHead,
+  TableHeaderCell,
+  TableBody,
+  TableRow,
+  TableCell,
+  TabGroup,
+  TabList,
+  Tab,
+  Button,
+  Title,
+  Subtitle,
+  Bold,
+  Flex,
+  Grid,
+  Col,
+  NumberInput,
+  Divider,
+} from "@tremor/react";
+import Chart from "../components/Chart";
+
+// --- Types & Constants ---
 
 type Contract = {
   id: string;
   label: string;
+  subtitle: string;
   type: string;
   strike: number;
   premium: number;
@@ -19,6 +48,7 @@ type Position = {
   entry: number;
   current: number;
   pnl: number;
+  type?: string;
 };
 
 type Portfolio = {
@@ -38,23 +68,56 @@ type NewsItem = {
   impact_hint: string;
 };
 
+const CONTRACT_SIZE: Record<string, number> = {
+  "BARC.L": 100, "AZN.L": 100, "SPY": 100, "NVDA": 100, "ASML.AS": 100, "SAP.DE": 100,
+  "GBPUSD=X": 10000, "EURUSD=X": 10000, "JPY=X": 10000, "IGLT.L": 100, "BZ=F": 100, "GC=F": 100,
+};
+
+const ASSET_TYPE: Record<string, string> = {
+  "BARC.L": "Equity", "AZN.L": "Equity", "SPY": "Equity", "NVDA": "Equity", "ASML.AS": "Equity", "SAP.DE": "Equity",
+  "GBPUSD=X": "FX", "EURUSD=X": "FX", "JPY=X": "FX", "IGLT.L": "Rates", "BZ=F": "Commodity", "GC=F": "Commodity",
+};
+
+const CATEGORY_MAP: Record<string, string> = {
+  "macro": "MACRO", "uk": "UK", "us": "US", "eu": "EU",
+};
+
+const OPTION_NAMES: Record<string, { heading: string; sub: string }> = {
+  "bullish": { heading: "ATM CALL", sub: "Near-the-money call" },
+  "bearish": { heading: "ATM PUT", sub: "Near-the-money put" },
+  "lottery": { heading: "OTM CALL", sub: "Out-of-the-money call" },
+  "hedge":   { heading: "OTM PUT", sub: "Out-of-the-money put" },
+};
+
 const BACKEND_WS = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://127.0.0.1:8000/ws";
+const BACKEND_HTTP = BACKEND_WS.replace(/^ws/, "http").replace(/\/ws$/, "");
+
+// --- Icons ---
+const XIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+);
+
+// --- Helpers ---
 
 const fmt = (x: number, dp = 2) =>
   Number(x).toLocaleString("en-GB", { minimumFractionDigits: dp, maximumFractionDigits: dp });
 const fmtMoney = (x: number) => (x < 0 ? "-£" : "£") + fmt(Math.abs(x));
 const fmtPx = (x: number) => {
   const abs = Math.abs(x);
-  if (abs < 10) return fmt(x, 4);
+  if (abs < 1) return fmt(x, 4);
+  if (abs < 10) return fmt(x, 3);
   if (abs < 1000) return fmt(x, 2);
   return fmt(x, 1);
 };
 const shortTicker = (t: string) =>
   t.replace("=X", "").replace("=F", "").replace(".L", "").replace(".AS", "").replace(".DE", "");
 
+// --- Components ---
+
 export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const [running, setRunning] = useState(false);
+  const [waking, setWaking] = useState(false);
   const [simDuration, setSimDuration] = useState(1200);
   const [simTime, setSimTime] = useState(0);
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -63,13 +126,42 @@ export default function Home() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [selectedUnderlying, setSelectedUnderlying] = useState<string | null>(null);
-  const [selectedContractId, setSelectedContractId] = useState<string | null>(null);
   const [tradeQty, setTradeQty] = useState(1);
+  const [exchangeTab, setExchangeTab] = useState<number>(0); // 0: Options, 1: Futures
+  const [contractType, setContractType] = useState<string>("bullish");
   const [realDate, setRealDate] = useState<string>("");
+  const [timeMap, setTimeMap] = useState<Record<number, string>>({});
+  const [newsSearch, setNewsSearch] = useState("");
+  const [assetSort, setAssetSort] = useState<{ col: string; dir: 1 | -1 }>({ col: "Ticker", dir: 1 });
+  
+  // Optimistic UI states
+  const [closingPositions, setClosingPositions] = useState<Set<string>>(new Set());
+  const [pulseBuy, setPulseBuy] = useState(false);
+  const [pulseSell, setPulseSell] = useState(false);
+
+  // Timeframe and chart toggle
+  const [timeframe, setTimeframe] = useState<number | "all">(15);
+  const [chartMode, setChartMode] = useState<"line" | "area">("line");
+
+  // Warm-up on load
+  useEffect(() => {
+    const warmUp = async () => {
+      try {
+        setWaking(true);
+        await fetch(BACKEND_HTTP);
+      } catch (e) {
+        console.error("Warm-up failed", e);
+      } finally {
+        setWaking(false);
+      }
+    };
+    warmUp();
+  }, []);
 
   const startSim = useCallback(() => {
     setRunning(true);
     setNews([]);
+    setTimeMap({});
     const ws = new WebSocket(BACKEND_WS);
     wsRef.current = ws;
     ws.onmessage = (ev) => {
@@ -78,14 +170,18 @@ export default function Home() {
         setSimDuration(msg.sim_duration_sec);
         setContracts(msg.contracts);
         const tickers = Array.from(new Set(msg.contracts.map((c: Contract) => c.underlying))) as string[];
-        setSelectedUnderlying((prev) => prev || tickers[0]);
+        if (!selectedUnderlying) setSelectedUnderlying(tickers[0]);
       } else if (msg.type === "tick") {
         setSimTime(msg.sim_time);
         setPrices(msg.prices);
         setHistory(msg.history);
         setContracts(msg.menu);
         setPortfolio(msg.portfolio);
+        // Use HH:MM format for the chart timeline
+        const timeStr = msg.real_time.slice(11, 16); // "HH:MM"
         setRealDate(msg.real_time.slice(0, 10));
+        setTimeMap(prev => ({ ...prev, [Math.floor(msg.sim_time)]: timeStr }));
+        setClosingPositions(new Set());
       } else if (msg.type === "news") {
         setNews((prev) => [msg, ...prev]);
       } else if (msg.type === "sim_complete") {
@@ -93,259 +189,554 @@ export default function Home() {
       }
     };
     ws.onclose = () => setRunning(false);
-  }, []);
+  }, [selectedUnderlying]);
 
   const placeOrder = useCallback(
     (direction: 1 | -1) => {
-      if (!wsRef.current || wsRef.current.readyState !== 1 || !selectedContractId) return;
+      if (!wsRef.current || wsRef.current.readyState !== 1 || !selectedUnderlying) return;
+      const suffix = exchangeTab === 1 ? "future" : contractType;
+      const contractId = `${selectedUnderlying}_${suffix}`;
       const qty = direction * Math.max(1, tradeQty);
+      
+      if (direction === 1) {
+        setPulseBuy(true);
+        setTimeout(() => setPulseBuy(false), 200);
+      } else {
+        setPulseSell(true);
+        setTimeout(() => setPulseSell(false), 200);
+      }
+
       wsRef.current.send(
-        JSON.stringify({ type: "order", contract_id: selectedContractId, quantity: qty })
+        JSON.stringify({ type: "order", contract_id: contractId, quantity: qty })
       );
     },
-    [selectedContractId, tradeQty]
+    [selectedUnderlying, exchangeTab, contractType, tradeQty]
   );
 
-  const tickers = Array.from(new Set(contracts.map((c) => c.underlying)));
-  const selectedContracts = contracts.filter((c) => c.underlying === selectedUnderlying);
-  const orderMap = ["bullish", "bearish", "lottery", "hedge"];
-  const subtitles: Record<string, string> = {
-    bullish: "Call · Conviction",
-    bearish: "Put · Conviction",
-    lottery: "Call · Upside",
-    hedge: "Put · Downside",
-  };
-  const typeLabel: Record<string, string> = {
-    bullish: "Bullish",
-    bearish: "Bearish",
-    lottery: "Lottery",
-    hedge: "Hedge",
-  };
+  const closePosition = useCallback((contract_id: string, quantity: number) => {
+    if (!wsRef.current || wsRef.current.readyState !== 1) return;
+    setClosingPositions(prev => new Set(prev).add(contract_id));
+    wsRef.current.send(
+      JSON.stringify({ type: "order", contract_id, quantity: -quantity })
+    );
+  }, []);
+
+  const liquidateAll = useCallback(() => {
+    if (!portfolio || !wsRef.current || wsRef.current.readyState !== 1) return;
+    portfolio.positions.forEach(p => {
+      closePosition(p.contract_id, p.quantity);
+    });
+  }, [portfolio, closePosition]);
+
+  // Derived Stats
+  const sharesOwned = useMemo(() => {
+    return (portfolio?.positions || []).reduce((acc, p) => acc + Math.abs(p.quantity), 0);
+  }, [portfolio]);
+
+  const netExposure = useMemo(() => {
+    return (portfolio?.positions || []).reduce((acc, p) => {
+      const ticker = contracts.find(c => c.id === p.contract_id)?.underlying || "";
+      const size = CONTRACT_SIZE[ticker] || 1;
+      return acc + (p.quantity * size * p.current);
+    }, 0);
+  }, [portfolio, contracts]);
+
+  const tickers = useMemo(() => Array.from(new Set(contracts.map((c) => c.underlying))), [contracts]);
+  
+  const sortedAssets = useMemo(() => {
+    const list = tickers.map(t => {
+      const px = prices[t] ?? 0;
+      const hist = history[t] || [];
+      const first = hist.length ? hist[0].px : px;
+      const pct = first > 0 ? (px / first - 1) * 100 : 0;
+      return { ticker: t, price: px, chg: pct, type: ASSET_TYPE[t] || "Equity" };
+    });
+    
+    return list.sort((a, b) => {
+      let valA: any = a.ticker, valB: any = b.ticker;
+      if (assetSort.col === "Ref Price") { valA = a.price; valB = b.price; }
+      else if (assetSort.col === "% Chg") { valA = a.chg; valB = b.chg; }
+      else if (assetSort.col === "Type") { valA = a.type; valB = b.type; }
+      
+      if (valA < valB) return -assetSort.dir;
+      if (valA > valB) return assetSort.dir;
+      return 0;
+    });
+  }, [tickers, prices, history, assetSort]);
+
+  const filteredNews = useMemo(() => {
+    if (!newsSearch) return news;
+    return news.filter(n => 
+      n.headline.toLowerCase().includes(newsSearch.toLowerCase()) || 
+      n.category.toLowerCase().includes(newsSearch.toLowerCase())
+    );
+  }, [news, newsSearch]);
+
+  const selectedContract = useMemo(() => {
+    const suffix = exchangeTab === 1 ? "future" : contractType;
+    return contracts.find(c => c.underlying === selectedUnderlying && c.id.endsWith(`_${suffix}`));
+  }, [contracts, selectedUnderlying, contractType, exchangeTab]);
+
+  const bidAsk = useMemo(() => {
+    if (!selectedContract) return { bid: 0, ask: 0 };
+    const mid = selectedContract.premium;
+    return { bid: mid * 0.998, ask: mid * 1.002 };
+  }, [selectedContract]);
 
   const remaining = Math.max(0, simDuration - simTime);
   const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
   const ss = String(Math.floor(remaining % 60)).padStart(2, "0");
 
-  const selectedHist = (selectedUnderlying && history[selectedUnderlying]) || [];
+  const selectedHist = useMemo(() => {
+    const raw = (selectedUnderlying && history[selectedUnderlying]) || [];
+    if (timeframe === "all") return raw;
+    const cutoff = simTime - timeframe;
+    return raw.filter(d => d.t >= cutoff);
+  }, [selectedUnderlying, history, simTime, timeframe]);
 
   return (
-    <main className="h-screen flex flex-col bg-[#0b0d12] text-[#e8ecf3] font-sans text-[12px]">
-      {/* TOP BAR */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[#1f242e]">
-        <div className="flex items-center gap-2">
-          <div className="w-1.5 h-1.5 rounded-full bg-[#4d8eff] shadow-[0_0_8px_#4d8eff]"></div>
-          <h1 className="text-[12px] font-bold tracking-wider uppercase">Multi-Asset Derivatives Sim</h1>
-          <span className="text-[#4f5662] text-[11px] ml-3">March – May 2025 · £100,000 starting</span>
+    <main className="h-screen flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none">
+      {/* WAKING OVERLAY */}
+      {waking && (
+        <div className="fixed inset-0 z-[100] bg-tremor-background-muted/80 flex flex-col items-center justify-center backdrop-blur-sm">
+          <div className="w-12 h-12 border-4 border-tremor-brand/20 border-t-tremor-brand rounded-full animate-spin mb-4"></div>
+          <div className="text-[14px] font-semibold tracking-widest uppercase text-tremor-brand">Waking market server…</div>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="font-mono text-[18px] font-semibold tabular-nums">{mm}:{ss}</span>
-          <button
+      )}
+
+      {/* MARKET TAPE STRIP */}
+      <div className="h-10 bg-tremor-background-subtle border-b border-tremor-border flex items-center overflow-hidden shrink-0">
+        <div className="flex animate-marquee whitespace-nowrap">
+          {[1, 2].map(iter => (
+            <div key={iter} className="flex shrink-0">
+              {tickers.map(t => {
+                const px = prices[t] ?? 0;
+                const hist = history[t] || [];
+                const first = hist.length ? hist[0].px : px;
+                const pct = first > 0 ? (px / first - 1) * 100 : 0;
+                const isSel = t === selectedUnderlying;
+                return (
+                  <div 
+                    key={t + iter} 
+                    onClick={() => setSelectedUnderlying(t)}
+                    className={`flex items-center gap-2 px-4 h-10 cursor-pointer group transition-colors border-r border-tremor-border bg-tremor-background-subtle ${isSel ? "bg-tremor-brand/10 shadow-[inset_0_2px_0_0_var(--color-tremor-brand-DEFAULT)]" : "hover:bg-tremor-content-strong/[0.04]"}`}
+                  >
+                    <span className={`font-bold text-[11px] ${isSel ? "text-tremor-brand" : "text-tremor-content"}`}>{shortTicker(t)}</span>
+                    <span className="font-mono text-[11px]">{fmtPx(px)}</span>
+                    <span className="font-mono text-[10px] ml-1" style={{ color: pct >= 0 ? '#86c994' : '#d97f7f' }}>
+                      {pct >= 0 ? "↗" : "↘"} {Math.abs(pct).toFixed(2)}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        <style jsx>{`
+          @keyframes marquee {
+            from { transform: translateX(0); }
+            to { transform: translateX(-50%); }
+          }
+          .animate-marquee {
+            display: flex;
+            width: max-content;
+            animation: marquee 40s linear infinite;
+          }
+          .animate-marquee:hover {
+            animation-play-state: paused;
+          }
+        `}</style>
+      </div>
+
+      {/* TOP STATS BAR */}
+      <div className="flex items-center h-12 border-b border-tremor-border px-4 shrink-0 bg-tremor-background-subtle">
+        <Flex className="flex-1 items-center gap-6 overflow-hidden" justifyContent="start">
+          <Stat label="Contracts Held" value={fmt(sharesOwned, 0)} />
+          <Stat 
+            label="Realised P&L" 
+            value={fmtMoney(portfolio?.closed_pnl ?? 0)} 
+            delta={portfolio?.closed_pnl}
+          />
+          <Stat 
+            label="Unrealised P&L" 
+            value={fmtMoney(portfolio?.unrealised_pnl ?? 0)} 
+            delta={portfolio?.unrealised_pnl}
+          />
+          <Stat label="Available Cash" value={fmtMoney(portfolio?.cash ?? 100000)} />
+          <Stat 
+            label="Total P&L" 
+            value={fmtMoney(portfolio?.total_pnl ?? 0)} 
+            delta={portfolio?.total_pnl}
+          />
+          <Stat label="Net Exposure" value={fmtMoney(netExposure)} />
+        </Flex>
+        
+        <div className="flex items-center gap-4 ml-4">
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${running ? "bg-tremor-brand shadow-[0_0_8px_var(--color-tremor-brand-DEFAULT)] animate-pulse-dot" : "bg-tremor-content-strong/10"}`}></div>
+            <span className="font-mono text-[18px] font-bold tabular-nums tracking-tight">{mm}:{ss}</span>
+          </div>
+          <Button
             onClick={startSim}
             disabled={running}
-            className="bg-[#4d8eff] hover:brightness-110 disabled:bg-[#1f242e] disabled:text-[#4f5662] disabled:cursor-not-allowed text-white px-3 py-1.5 rounded text-[11px] font-semibold"
+            variant="primary"
+            size="sm"
+            className={running ? "bg-tremor-background-emphasis text-tremor-content-subtle border-none" : ""}
           >
             {running ? "Running…" : "Start Sim"}
-          </button>
+          </Button>
         </div>
       </div>
 
-      {/* MARKET TAPE */}
-      <div className="flex border-b border-[#1f242e] overflow-x-auto bg-[#12151c]">
-        {tickers.length === 0 && (
-          <div className="text-[#4f5662] p-2 text-[11px]">Click Start Sim to load market.</div>
-        )}
-        {tickers.map((t) => {
-          const px = prices[t] ?? 0;
-          const hist = history[t] || [];
-          const first = hist.length ? hist[0].px : px;
-          const pct = first > 0 ? (px / first - 1) * 100 : 0;
-          const isSel = t === selectedUnderlying;
-          return (
-            <div
-              key={t}
-              onClick={() => { setSelectedUnderlying(t); setSelectedContractId(null); }}
-              className={`relative px-4 py-2.5 border-r border-[#1f242e] cursor-pointer min-w-[130px] hover:bg-white/[0.02] ${isSel ? "bg-[#4d8eff]/5" : ""}`}
-            >
-              {isSel && <div className="absolute top-0 left-0 right-0 h-0.5 bg-[#4d8eff] shadow-[0_0_8px_#4d8eff]"></div>}
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-[#4f5662]">{shortTicker(t)}</div>
-              <div className="flex items-baseline gap-1 mt-0.5">
-                <span className="font-mono text-[13px] font-semibold">{fmtPx(px)}</span>
-                <span className="text-[#4f5662] text-[8px]">•</span>
-                <span className={`font-mono text-[11px] font-medium ${pct >= 0 ? "text-[#2ecc71]" : "text-[#e63946]"}`}>
-                  {(pct >= 0 ? "+" : "") + pct.toFixed(2)}%
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* MAIN GRID: chart + news */}
-      <div className="flex-1 grid grid-cols-[1fr_340px] gap-px bg-[#1f242e] min-h-0">
-        {/* CHART */}
-        <div className="bg-[#12151c] flex flex-col min-h-0 overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-[#1f242e] flex items-baseline gap-3 text-[10px] uppercase tracking-wider text-[#4f5662] font-semibold">
-            <span className="text-[16px] font-semibold text-[#e8ecf3] normal-case tracking-normal">{selectedUnderlying ? shortTicker(selectedUnderlying) : "—"}</span>
+      {/* MAIN GRID */}
+      <div className="flex-1 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis overflow-hidden">
+        {/* PANEL A: ASSETS (Spans 2 rows) */}
+        <Card className="row-span-2 p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
+          <PanelHeader title="Assets" />
+          <div className="flex-1 overflow-auto">
+            <Table>
+              <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
+                <TableRow className="border-b border-tremor-border">
+                  {["Ticker", "Ref Price", "% Chg", "Type"].map(col => (
+                    <TableHeaderCell 
+                      key={col} 
+                      onClick={() => setAssetSort({ col, dir: assetSort.col === col ? (assetSort.dir === 1 ? -1 : 1) : 1 })}
+                      className="px-3 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle cursor-pointer hover:text-tremor-content transition-colors"
+                    >
+                      <Flex justifyContent="start" className="gap-1">
+                        {col}
+                        <span className="text-[8px] opacity-40">↕</span>
+                      </Flex>
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {sortedAssets.map(a => (
+                  <TableRow 
+                    key={a.ticker} 
+                    onClick={() => setSelectedUnderlying(a.ticker)}
+                    className={`group border-b border-tremor-border/50 cursor-pointer hover:bg-tremor-brand/[0.05] transition-colors ${selectedUnderlying === a.ticker ? "bg-tremor-brand/[0.05]" : ""}`}
+                  >
+                    <TableCell className="px-3 py-2.5 font-bold relative text-[11px]">
+                      {selectedUnderlying === a.ticker && <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-tremor-brand"></div>}
+                      {shortTicker(a.ticker)}
+                    </TableCell>
+                    <TableCell className="px-3 py-2.5 font-mono text-tremor-content">{fmtPx(a.price)}</TableCell>
+                    <TableCell className="px-3 py-2.5">
+                      <BadgeDelta deltaType={a.chg >= 0 ? "moderateIncrease" : "moderateDecrease"} size="xs">
+                        {a.chg.toFixed(2)}%
+                      </BadgeDelta>
+                    </TableCell>
+                    <TableCell className="px-3 py-2.5 text-[9px] text-tremor-content-subtle uppercase font-medium">{a.type}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
-          <div className="flex-1 relative">
-            {realDate && (
-              <div className="absolute top-3 right-4 bg-[#1f242e] text-[#7a8290] px-2.5 py-0.5 rounded-full text-[10px] font-medium z-10 font-mono">{realDate}</div>
+        </Card>
+
+        {/* PANEL B: NEWS */}
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+          <PanelHeader 
+            title="Market Intelligence" 
+            headerExtra={
+              <div className="relative">
+                <input 
+                  type="text" 
+                  placeholder="Search news..." 
+                  value={newsSearch}
+                  onChange={e => setNewsSearch(e.target.value)}
+                  className="bg-tremor-background-muted border border-tremor-border rounded h-6 px-2 text-[10px] w-40 outline-none focus:border-tremor-brand/50"
+                />
+              </div>
+            }
+          />
+          <div className="flex-1 overflow-auto">
+            {filteredNews.length === 0 ? (
+              <div className="p-8 text-center text-tremor-content-subtle italic">No news matching filters.</div>
+            ) : (
+              <Table>
+                <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
+                  <TableRow className="border-b border-tremor-border">
+                    <TableHeaderCell className="px-4 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle w-20">Ticker</TableHeaderCell>
+                    <TableHeaderCell className="px-4 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle">Headline</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredNews.map((n, i) => (
+                    <TableRow key={i} className="group border-b border-tremor-border/50 animate-fade-in hover:bg-tremor-content-strong/[0.02]">
+                      <TableCell className="px-4 py-3 align-top">
+                        <Badge color={
+                          n.category === "macro" ? "amber" :
+                          n.category === "uk" ? "blue" :
+                          n.category === "us" ? "red" : "violet"
+                        } size="xs">
+                          {CATEGORY_MAP[n.category] || n.category.toUpperCase()}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="px-4 py-3 align-top group/head relative">
+                        <Title className="font-medium text-[13px] leading-snug">{n.headline}</Title>
+                        <Text className="text-[10px] text-tremor-content-subtle mt-1 font-mono">{n.real_time.slice(0, 16).replace("T", " ")}</Text>
+                        <div className="invisible group-hover/head:visible absolute top-full left-0 z-50 bg-tremor-background-emphasis text-tremor-content-emphasis text-[11px] p-2 rounded shadow-xl border border-tremor-brand/20 max-w-xs mt-1">
+                          {n.impact_hint}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
-            <Chart hist={selectedHist} />
           </div>
-        </div>
+        </Card>
 
-        {/* NEWS */}
-        <div className="bg-[#12151c] flex flex-col min-h-0 overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-[#1f242e] text-[10px] uppercase tracking-wider text-[#4f5662] font-semibold">Market News</div>
-          <div className="flex-1 overflow-auto p-3 space-y-2">
-            {news.length === 0 && <div className="text-center text-[#4f5662] text-[11px] p-4">Headlines will appear as the sim progresses.</div>}
-            {news.map((n, i) => (
-              <div key={i} className="relative bg-white/[0.02] border border-[#1f242e] rounded p-2 pl-3">
-                <div className={`absolute left-0 top-0 bottom-0 w-0.5 ${
-                  n.category === "macro" ? "bg-[#d29922]" :
-                  n.category === "uk" ? "bg-[#58a6ff]" :
-                  n.category === "us" ? "bg-[#e63946]" : "bg-[#a371f7]"
-                }`}></div>
-                <div className="text-[10px] text-[#4f5662] font-mono">{n.real_time.slice(0, 10)}</div>
-                <div className="text-[12px] font-medium mt-0.5">{n.headline}</div>
-                <div className="text-[10px] text-[#7a8290] italic mt-1">{n.impact_hint}</div>
-              </div>
-            ))}
+        {/* PANEL C: POSITIONS */}
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+          <PanelHeader 
+            title="Live Portfolio" 
+            headerExtra={
+              <Button 
+                variant="secondary" 
+                size="xs"
+                onClick={liquidateAll}
+                className="text-[10px] font-bold uppercase text-rose-500 hover:text-rose-600 border-none bg-transparent hover:bg-rose-500/10"
+              >
+                Liquidate All
+              </Button>
+            }
+          />
+          <div className="flex-1 overflow-auto">
+            <Table>
+              <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
+                <TableRow className="border-b border-tremor-border">
+                  <TableHeaderCell className="px-3 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle">Security</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Net Pos</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Avg Price</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Pos Value</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">U P&L</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Close</TableHeaderCell>
+                </TableRow>
+              </TableHead>
+              <TableBody className="font-mono">
+                {!portfolio || portfolio.positions.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-12 text-center text-tremor-content-subtle text-[14px]">
+                      {Array(6).fill("- : -").join("     ")}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  portfolio.positions.map(p => {
+                    const isClosing = closingPositions.has(p.contract_id);
+                    const ticker = contracts.find(c => c.id === p.contract_id)?.underlying || "";
+                    const size = CONTRACT_SIZE[ticker] || 1;
+                    const posValue = Math.abs(p.quantity * size * p.current);
+                    const isPositive = p.pnl >= 0;
+                    return (
+                      <TableRow key={p.contract_id} className={`border-b border-tremor-border/50 hover:bg-tremor-content-strong/[0.04] transition-colors ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
+                        <TableCell className="px-3 py-2.5 font-sans font-bold">{p.label.split(" (")[0]}</TableCell>
+                        <TableCell className="px-2 py-2.5 text-right font-bold">
+                          <Text color={p.quantity >= 0 ? "emerald" : "rose"} className="font-bold">{p.quantity}</Text>
+                        </TableCell>
+                        <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtPx(p.entry)}</TableCell>
+                        <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtMoney(posValue)}</TableCell>
+                        <TableCell className="px-2 py-2.5 text-right">
+                          <Text color={isPositive ? "emerald" : "rose"} className="font-bold">{fmtMoney(p.pnl)}</Text>
+                        </TableCell>
+                        <TableCell className="px-2 py-2.5 text-right">
+                          <Button 
+                            variant="light" 
+                            size="xs" 
+                            icon={XIcon}
+                            onClick={() => closePosition(p.contract_id, p.quantity)}
+                            className="hover:bg-rose-500 hover:text-tremor-background-muted transition-colors"
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
           </div>
-        </div>
-      </div>
+        </Card>
 
-      {/* BOTTOM: order bar */}
-      <div className="grid grid-cols-[2fr_1fr_1.4fr] gap-px bg-[#1f242e] h-[220px] border-t border-[#1f242e]">
-        {/* Contracts */}
-        <div className="bg-[#12151c] p-3 overflow-y-auto">
-          <h3 className="text-[10px] uppercase tracking-wider text-[#4f5662] font-semibold mb-2">
-            Contracts <span className="text-[#4d8eff] ml-2 font-mono">{selectedUnderlying && shortTicker(selectedUnderlying)}</span>
-          </h3>
-          <div className="grid grid-cols-2 gap-2">
-            {orderMap.map((kind) => {
-              const c = selectedContracts.find((x) => x.id.endsWith("_" + kind));
-              if (!c) return null;
-              const isSel = c.id === selectedContractId;
-              return (
-                <div
-                  key={kind}
-                  onClick={() => setSelectedContractId(c.id)}
-                  className={`bg-white/[0.02] border rounded-md p-3 cursor-pointer flex flex-col transition-all ${isSel ? "border-[#4d8eff] border-2 bg-[#4d8eff]/5" : "border-[#1f242e] hover:border-[#4f5662]"}`}
-                >
-                  <div className="text-[9px] uppercase tracking-wide text-[#4f5662] font-semibold mb-0.5">{subtitles[kind]}</div>
-                  <div className="text-[13px] font-semibold">{typeLabel[kind]}</div>
-                  <div className="text-[10px] text-[#7a8290] mt-0.5 font-mono">Strike {fmtPx(c.strike)}</div>
-                  <div className="text-[22px] font-semibold mt-auto text-right font-mono">{fmtPx(c.premium)}</div>
+        {/* PANEL E: EXCHANGE */}
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+          <PanelHeader title="Execution Engine" />
+          <div className="flex-1 p-4 flex flex-col">
+            <Flex alignItems="baseline" justifyContent="between" className="mb-4">
+              <Title className="text-[20px] font-bold tracking-tight">{selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}</Title>
+              {/* Tab Toggle */}
+              <TabGroup index={exchangeTab} onIndexChange={setExchangeTab}>
+                <TabList variant="solid" className="p-0.5">
+                  <Tab className="text-[10px] font-bold uppercase py-0.5 px-3">Options</Tab>
+                  <Tab className="text-[10px] font-bold uppercase py-0.5 px-3">Futures</Tab>
+                </TabList>
+              </TabGroup>
+            </Flex>
+
+            <Flex className="gap-2 mb-4">
+              <div className="relative flex-1">
+                <input 
+                  type="number" 
+                  value={tradeQty}
+                  onChange={e => setTradeQty(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full bg-tremor-background-muted border border-tremor-border rounded h-10 px-3 font-mono text-[16px] outline-none focus:border-tremor-brand/30"
+                />
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Trade */}
-        <div className="bg-[#12151c] p-3 overflow-y-auto">
-          <h3 className="text-[10px] uppercase tracking-wider text-[#4f5662] font-semibold mb-2">Trade</h3>
-          <div className="flex border border-[#1f242e] rounded overflow-hidden mb-3">
-            <input
-              type="number"
-              value={tradeQty}
-              onChange={(e) => setTradeQty(Math.max(1, parseInt(e.target.value) || 1))}
-              min={1}
-              className="bg-[#12151c] text-white px-3 py-1.5 w-20 outline-none font-mono text-[14px]"
-            />
-            <div className="flex flex-1 bg-[#1f242e] gap-px">
-              {[1, 5, 10, 25].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => setTradeQty(q)}
-                  className={`flex-1 px-2 text-[11px] font-medium ${tradeQty === q ? "bg-[#4d8eff] text-white" : "bg-[#12151c] text-[#7a8290] hover:bg-[#1f242e]"}`}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => placeOrder(1)}
-              disabled={!selectedContractId}
-              className="py-3 rounded font-bold text-[13px] uppercase tracking-wide bg-gradient-to-b from-[#34d399] to-[#10b981] disabled:from-[#1f242e] disabled:to-[#1f242e] disabled:text-[#4f5662] disabled:cursor-not-allowed hover:brightness-110 transition"
-            >
-              Buy
-            </button>
-            <button
-              onClick={() => placeOrder(-1)}
-              disabled={!selectedContractId}
-              className="py-3 rounded font-bold text-[13px] uppercase tracking-wide bg-gradient-to-b from-[#f87171] to-[#ef4444] disabled:from-[#1f242e] disabled:to-[#1f242e] disabled:text-[#4f5662] disabled:cursor-not-allowed hover:brightness-110 transition"
-            >
-              Sell
-            </button>
-          </div>
-        </div>
-
-        {/* Portfolio */}
-        <div className="bg-[#12151c] p-3 overflow-y-auto">
-          <h3 className="text-[10px] uppercase tracking-wider text-[#4f5662] font-semibold mb-2">Portfolio</h3>
-          <div className="mb-3">
-            <div className={`text-[28px] font-bold font-mono inline-block pb-0.5 border-b-2 ${portfolio && portfolio.total_pnl >= 0 ? "border-[#2ecc71] text-[#2ecc71]" : "border-[#e63946] text-[#e63946]"}`}>
-              {fmtMoney(portfolio?.total_pnl ?? 0)}
-            </div>
-          </div>
-          <div className="flex justify-between text-[11px] mb-1">
-            <span className="text-[#4f5662]">Cash</span>
-            <span className="text-[#7a8290] font-mono font-medium">{fmtMoney(portfolio?.cash ?? 100000)}</span>
-          </div>
-          <div className="flex justify-between text-[11px] mb-1">
-            <span className="text-[#4f5662]">Equity</span>
-            <span className="text-[#7a8290] font-mono font-medium">{fmtMoney(portfolio?.equity ?? 100000)}</span>
-          </div>
-          <div className="mt-3 border border-[#1f242e] rounded overflow-hidden">
-            {portfolio && portfolio.positions.length > 0 ? portfolio.positions.map((p, i) => (
-              <div key={i} className={`grid grid-cols-[1fr_40px_80px] px-2 py-1.5 text-[11px] items-center ${i % 2 === 1 ? "bg-white/[0.02]" : ""}`}>
-                <div className="text-white font-medium">{p.label.replace(/ \(.*\)/, "")}</div>
-                <div className="text-right text-[#4f5662] font-mono">{p.quantity}</div>
-                <div className={`text-right font-mono font-semibold ${p.pnl >= 0 ? "text-[#2ecc71]" : "text-[#e63946]"}`}>{fmtMoney(p.pnl)}</div>
               </div>
-            )) : (
-              <div className="text-center text-[#4f5662] text-[11px] py-4">No positions.</div>
-            )}
+              <Flex className="gap-1 w-auto">
+                {[1, 10, 50, 100].map(v => (
+                  <Button 
+                    key={v} 
+                    size="xs"
+                    variant={tradeQty === v ? "primary" : "secondary"}
+                    onClick={() => setTradeQty(v)}
+                    className="h-10 px-3 text-[10px]"
+                  >
+                    {v}
+                  </Button>
+                ))}
+              </Flex>
+            </Flex>
+
+            <div className="flex-1 min-h-0 overflow-y-auto mb-4">
+              {exchangeTab === 0 ? (
+                <Grid numItems={2} className="gap-2">
+                  {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
+                    const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
+                    const isSel = contractType === type;
+                    return (
+                      <Card
+                        key={type}
+                        onClick={() => setContractType(type)}
+                        decoration={isSel ? "left" : undefined}
+                        decorationColor="tremor-brand"
+                        className={`p-3 cursor-pointer transition-all border-tremor-border shadow-none ${isSel ? "bg-tremor-brand/5" : "hover:bg-tremor-content-strong/[0.04]"}`}
+                      >
+                        <Flex flexDirection="col" alignItems="start" justifyContent="start" className="h-full">
+                          <Text className="text-[10px] uppercase font-bold text-tremor-content-subtle tracking-wider">{c?.subtitle || type.toUpperCase()}</Text>
+                          <Text className="text-[9px] text-tremor-content-subtle truncate w-full mb-1 italic">{c?.label || "—"}</Text>
+                          <Text className="text-[10px] text-tremor-content-subtle font-mono mt-auto" color="slate">Strike {fmtPx(c?.strike || 0)}</Text>
+                          <Metric className="text-[20px] font-bold font-mono text-right w-full">{fmtPx(c?.premium || 0)}</Metric>
+                        </Flex>
+                      </Card>
+                    );
+                  })}
+                </Grid>
+              ) : (
+                <Card 
+                  decoration="left"
+                  decorationColor="tremor-brand"
+                  className="p-4 border-tremor-brand bg-tremor-brand/5 shadow-none"
+                >
+                  <Flex justify="between" alignItems="start" className="mb-2">
+                    <Text className="text-[11px] uppercase font-black tracking-widest text-tremor-brand">1M Future</Text>
+                    <Text className="text-[10px] text-tremor-content-subtle font-bold">{selectedUnderlying}</Text>
+                  </Flex>
+                  <Metric className="text-[32px] font-bold font-mono text-right tracking-tighter mb-1">
+                    {fmtPx(contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith("_future"))?.premium || 0)}
+                  </Metric>
+                  <Text className="text-[9px] text-tremor-content-subtle text-right font-mono uppercase tracking-widest">Live Futures Price</Text>
+                </Card>
+              )}
+            </div>
+
+            <Grid numItems={2} className="gap-3 mb-4">
+              <Card 
+                onClick={() => placeOrder(-1)}
+                decoration="left"
+                decorationColor="rose"
+                className={`flex flex-col items-center justify-center p-3 cursor-pointer bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/20 transition-all shadow-none ${pulseSell ? "btn-pulse-sell" : ""}`}
+              >
+                <Text className="text-[10px] uppercase font-bold text-rose-500 mb-1">SELL (BID)</Text>
+                <Metric className="font-mono text-[20px] font-bold text-rose-500">{fmtPx(bidAsk.bid)}</Metric>
+              </Card>
+              <Card 
+                onClick={() => placeOrder(1)}
+                decoration="left"
+                decorationColor="emerald"
+                className={`flex flex-col items-center justify-center p-3 cursor-pointer bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 transition-all shadow-none ${pulseBuy ? "btn-pulse-buy" : ""}`}
+              >
+                <Text className="text-[10px] uppercase font-bold text-emerald-500 mb-1">BUY (ASK)</Text>
+                <Metric className="font-mono text-[20px] font-bold text-emerald-500">{fmtPx(bidAsk.ask)}</Metric>
+              </Card>
+            </Grid>
+
+            <div className="mt-auto border-t border-tremor-border pt-3 flex justify-between items-baseline">
+              <Text className="text-tremor-content-subtle uppercase text-[9px] font-bold tracking-wider">Notional Value</Text>
+              <Text className="font-mono text-[14px] text-tremor-content">
+                £{fmt(tradeQty * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}
+              </Text>
+            </div>
           </div>
-        </div>
+        </Card>
+
+        {/* PANEL F: CHART */}
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background relative shadow-none">
+          <PanelHeader 
+            title="Market Action" 
+            headerExtra={
+              <Flex className="gap-3 items-center w-auto">
+                <TabGroup index={([3, 15, 30, 60, "all"] as const).indexOf(timeframe as any)} onIndexChange={(i) => setTimeframe([3, 15, 30, 60, "all"][i] as any)}>
+                  <TabList variant="line" className="p-0.5">
+                    {([3, 15, 30, 60, "all"] as const).map(m => (
+                      <Tab key={m} className="px-2 py-0.5 text-[9px] font-bold uppercase">{m === "all" ? "All" : `${m}m`}</Tab>
+                    ))}
+                  </TabList>
+                </TabGroup>
+                <TabGroup index={chartMode === "line" ? 0 : 1} onIndexChange={(i) => setChartMode(i === 0 ? "line" : "area")}>
+                  <TabList variant="line" className="p-0.5">
+                    <Tab className="px-2 py-0.5 text-[9px] font-bold uppercase">Line</Tab>
+                    <Tab className="px-2 py-0.5 text-[9px] font-bold uppercase">Area</Tab>
+                  </TabList>
+                </TabGroup>
+              </Flex>
+            }
+          />
+          <Badge className="absolute top-10 right-3 z-10" color="tremor-brand">
+            {realDate}
+          </Badge>
+          <div className="flex-1 relative overflow-hidden bg-tremor-background-muted/30">
+            <Chart hist={selectedHist} mode={chartMode} timeMap={timeMap} ticker={selectedUnderlying || "Price"} />
+          </div>
+        </Card>
       </div>
     </main>
   );
 }
 
-function Chart({ hist }: { hist: { t: number; px: number }[] }) {
-  if (hist.length < 2) return null;
-  const W = 800, H = 320;
-  const xs = hist.map((d) => d.t);
-  const ys = hist.map((d) => d.px);
-  const xmin = xs[0], xmax = xs[xs.length - 1];
-  const ymin = Math.min(...ys), ymax = Math.max(...ys);
-  const yrange = ymax - ymin || 0.01;
-  const ypad = yrange * 0.15;
-  const scaleX = (t: number) => ((t - xmin) / Math.max(1e-9, xmax - xmin)) * (W - 80) + 10;
-  const scaleY = (p: number) => H - 20 - ((p - (ymin - ypad)) / (yrange + 2 * ypad)) * (H - 40);
-  const path = hist.map((d, i) => `${i === 0 ? "M" : "L"}${scaleX(d.t).toFixed(2)},${scaleY(d.px).toFixed(2)}`).join("");
-  const last = ys[ys.length - 1];
-  const first = ys[0];
-  const up = last >= first;
-  const colour = up ? "#2ecc71" : "#e63946";
-  const lastX = scaleX(xmax), lastY = scaleY(last);
+// --- Sub-components ---
+
+function Stat({ label, value, delta }: { label: string; value: string; delta?: number }) {
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full">
-      {[ymin, (ymin + ymax) / 2, ymax].map((v, i) => {
-        const y = scaleY(v);
-        return <line key={i} x1={0} x2={W} y1={y} y2={y} stroke="#1f242e" strokeWidth={1} opacity={0.3} />;
-      })}
-      <path d={path} fill="none" stroke={colour} strokeWidth={1.5} />
-      <g transform={`translate(${lastX + 5}, ${lastY - 10})`}>
-        <rect width={55} height={20} rx={4} fill={colour} />
-        <text x={27.5} y={14} fill="white" fontSize={10} fontFamily="monospace" fontWeight={600} textAnchor="middle">{fmtPx(last)}</text>
-      </g>
-    </svg>
+    <Flex className="gap-2 group w-auto" justifyContent="start">
+      <div className="w-px h-3 bg-tremor-border"></div>
+      <Flex flexDirection="col" alignItems="start" className="w-auto">
+        <Text className="text-[9px] uppercase font-bold text-tremor-content-subtle leading-none mb-0.5 tracking-wider">{label}</Text>
+        <Flex className="gap-2" justifyContent="start">
+          <Metric className="text-[12px] font-bold leading-none">{value}</Metric>
+          {delta !== undefined && delta !== 0 && (
+            <BadgeDelta 
+              deltaType={delta > 0 ? "moderateIncrease" : "moderateDecrease"} 
+              className="scale-75 origin-left"
+            />
+          )}
+        </Flex>
+      </Flex>
+    </Flex>
   );
 }
+
+
+function PanelHeader({ title, headerExtra }: { title: string; headerExtra?: React.ReactNode }) {
+  return (
+    <div className="h-8 flex items-center justify-between px-3 border-b border-tremor-border shrink-0 bg-tremor-background-subtle/50">
+      <Text className="text-[10px] uppercase font-black tracking-widest text-tremor-content">{title}</Text>
+      {headerExtra}
+    </div>
+  );
+}
+

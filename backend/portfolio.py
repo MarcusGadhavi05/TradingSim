@@ -31,7 +31,7 @@ CONTRACT_SIZE = {
 class Position:
     contract_id: str
     quantity:    int        # +ve long, -ve short
-    entry_price: float      # premium paid per unit
+    entry_price: float      # premium paid per unit (or spot for futures)
 
 
 @dataclass
@@ -43,8 +43,12 @@ class Portfolio:
     def trade(self, contract: Contract, quantity: int, current_premium: float) -> str:
         """Buy (quantity > 0) or sell (quantity < 0) a contract."""
         size = CONTRACT_SIZE.get(contract.underlying, 1)
-        cost = quantity * current_premium * size
-        self.cash -= cost
+        is_future = contract.option_type == "future"
+        
+        # Options have an upfront premium (cost); futures don't (simplified margin-free model)
+        if not is_future:
+            cost = quantity * current_premium * size
+            self.cash -= cost
 
         # Check for existing position to net against
         for pos in self.positions:
@@ -62,6 +66,9 @@ class Portfolio:
                     sign = 1 if pos.quantity > 0 else -1
                     realised = sign * closing * (current_premium - pos.entry_price) * size
                     self.closed_pnl += realised
+                    if is_future:
+                        # For futures, realised P&L directly affects cash
+                        self.cash += realised
                     pos.quantity += quantity
                     if pos.quantity == 0:
                         self.positions.remove(pos)
@@ -95,6 +102,7 @@ class Portfolio:
                 "entry": pos.entry_price,
                 "current": current_px,
                 "pnl": pnl,
+                "type": c.option_type,
             })
         return {
             "cash": self.cash,
@@ -104,30 +112,3 @@ class Portfolio:
             "equity": self.cash + unrealised,
             "positions": breakdown,
         }
-
-
-# Self-test
-if __name__ == "__main__":
-    from contracts import build_menu
-
-    spots = {"SPY": 575.0}
-    menu = build_menu(spots)
-    contracts_by_id = {c.contract_id: c for c in menu}
-
-    port = Portfolio()
-    print(f"Starting cash: ${port.cash:,.2f}\n")
-
-    # Buy 2 SPY Bullish calls
-    bullish = contracts_by_id["SPY_bullish"]
-    entry_px = price_contract(bullish, 575.0)
-    print(port.trade(bullish, +2, entry_px))
-
-    # Spot rallies to 600
-    new_spot = 600.0
-    snap = port.mark_to_market(menu, {"SPY": new_spot})
-    print(f"\nSPY rallies from 575 to {new_spot}")
-    print(f"  Cash:           ${snap['cash']:>12,.2f}")
-    print(f"  Unrealised P&L: ${snap['unrealised_pnl']:>12,.2f}")
-    print(f"  Equity:         ${snap['equity']:>12,.2f}")
-    for p in snap["positions"]:
-        print(f"    {p['label']}: {p['quantity']} @ {p['entry']:.2f} -> {p['current']:.2f}  (${p['pnl']:+,.2f})")
