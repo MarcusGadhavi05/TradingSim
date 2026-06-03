@@ -1,6 +1,6 @@
 # Multi-Asset Derivatives Trading Sim
 
-AmplifyME-style replay simulator. Three months of real 2025 market data
+scenario-based replay simulator. Three months of real 2025 market data
 (Marchâ€“May, including Liberation Day) compressed into a 20-minute sim
 across 12 underlyings.
 
@@ -46,5 +46,5 @@ If any instruments fail to download (FLG=F sometimes does), pick a substitute â€
 - **Replay over simulation.** Real 2025 data, no GBM.
 - **Lazy options.** Constant IV per instrument; Greeks computed but hidden from user in v1.
 - **Friendly menu over chain.** Four named contracts per underlying, not a strike grid.
-- **One screen, big numbers.** AmplifyME's UX language.
+- **One screen, big numbers.** Big, tabular numbers; minimal chrome; nothing on screen that isn't earning its place.
 - **Scenario per session.** Don't bolt on more windows until the first one is polished.
