@@ -1,0 +1,146 @@
+[
+  {
+    "real_time": "2025-03-04T13:30:00Z",
+    "category": "macro",
+    "headline": "Trump imposes 25% tariffs on Canada and Mexico; 20% on China",
+    "impact_hint": "Risk-off; equities lower, gold bid, USD mixed"
+  },
+  {
+    "real_time": "2025-03-06T09:00:00Z",
+    "category": "macro",
+    "headline": "ECB cuts rates 25bp to 2.50%; Lagarde sounds cautious on trade",
+    "impact_hint": "EUR softer initially, then bid as terminal rate priced higher"
+  },
+  {
+    "real_time": "2025-03-12T08:00:00Z",
+    "category": "uk",
+    "headline": "UK GDP unexpectedly contracts 0.1% in January",
+    "impact_hint": "GBP weaker, gilts bid"
+  },
+  {
+    "real_time": "2025-03-13T12:30:00Z",
+    "category": "us",
+    "headline": "US CPI prints 2.8% YoY, cooler than expected 2.9%",
+    "impact_hint": "Stocks rally on softer print, USD softer"
+  },
+  {
+    "real_time": "2025-03-19T18:00:00Z",
+    "category": "us",
+    "headline": "Fed holds rates steady; dot plot still shows two cuts in 2025",
+    "impact_hint": "Stocks rally, USD softer, gold bid"
+  },
+  {
+    "real_time": "2025-03-20T12:00:00Z",
+    "category": "uk",
+    "headline": "BoE holds Bank Rate at 4.50%, vote 8-1",
+    "impact_hint": "GBP modestly higher"
+  },
+  {
+    "real_time": "2025-03-26T12:30:00Z",
+    "category": "uk",
+    "headline": "Reeves Spring Statement: fiscal headroom restored at \u00a39.9bn",
+    "impact_hint": "Gilts initially bid then sold as growth forecasts cut"
+  },
+  {
+    "real_time": "2025-04-02T20:00:00Z",
+    "category": "macro",
+    "headline": "LIBERATION DAY: Trump announces sweeping reciprocal tariffs on every major trading partner",
+    "impact_hint": "Massive risk-off; equities crash globally, safe havens bid"
+  },
+  {
+    "real_time": "2025-04-03T13:30:00Z",
+    "category": "macro",
+    "headline": "China retaliates with 34% tariffs on all US goods; EU mulls response",
+    "impact_hint": "Equity selloff accelerates; gold rips"
+  },
+  {
+    "real_time": "2025-04-04T20:00:00Z",
+    "category": "us",
+    "headline": "S&P 500 closes down 6%, worst two-day drop since March 2020",
+    "impact_hint": "VIX spikes above 45"
+  },
+  {
+    "real_time": "2025-04-07T08:00:00Z",
+    "category": "macro",
+    "headline": "Asian markets crash on open; Nikkei -8%, Hang Seng -13%",
+    "impact_hint": "Contagion fears, JPY safe-haven bid"
+  },
+  {
+    "real_time": "2025-04-08T14:00:00Z",
+    "category": "us",
+    "headline": "US Treasury yields surge as bond vigilantes hit; 10Y above 4.5%",
+    "impact_hint": "Bonds AND stocks selling \u2014 confidence shock"
+  },
+  {
+    "real_time": "2025-04-09T17:00:00Z",
+    "category": "macro",
+    "headline": "TRUMP PAUSES TARIFFS for 90 days; markets explode higher",
+    "impact_hint": "S&P 500 +9.5% on the day, largest gain since 2008"
+  },
+  {
+    "real_time": "2025-04-10T13:30:00Z",
+    "category": "us",
+    "headline": "US CPI prints 2.4% YoY, lowest in months",
+    "impact_hint": "Reinforces rally; rate cut expectations rebuild"
+  },
+  {
+    "real_time": "2025-04-17T11:45:00Z",
+    "category": "eu",
+    "headline": "ECB cuts rates 25bp again to 2.25%; signals more easing if tariffs persist",
+    "impact_hint": "EUR softer, European equities recover"
+  },
+  {
+    "real_time": "2025-04-23T09:00:00Z",
+    "category": "eu",
+    "headline": "ASML beats Q1 earnings but cuts FY guidance citing tariff uncertainty",
+    "impact_hint": "ASML lower; broader semis under pressure"
+  },
+  {
+    "real_time": "2025-04-30T12:30:00Z",
+    "category": "us",
+    "headline": "US Q1 GDP contracts 0.3% \u2014 first negative print since 2022",
+    "impact_hint": "Stagflation fears resurface briefly"
+  },
+  {
+    "real_time": "2025-05-07T18:00:00Z",
+    "category": "us",
+    "headline": "Fed holds rates steady; Powell warns tariffs could be stagflationary",
+    "impact_hint": "Stocks dip, USD bid"
+  },
+  {
+    "real_time": "2025-05-08T12:00:00Z",
+    "category": "uk",
+    "headline": "BoE cuts Bank Rate to 4.25%, vote 5-2-2 (split MPC)",
+    "impact_hint": "GBP softer, gilts bid, FTSE supported"
+  },
+  {
+    "real_time": "2025-05-08T15:00:00Z",
+    "category": "macro",
+    "headline": "US-UK trade deal announced; 10% baseline tariff retained, autos and steel carve-outs",
+    "impact_hint": "GBP and UK equities rally"
+  },
+  {
+    "real_time": "2025-05-12T13:00:00Z",
+    "category": "macro",
+    "headline": "US-China announce 90-day tariff truce; mutual reduction to 10%",
+    "impact_hint": "Massive risk-on; equities and oil rally, gold sold"
+  },
+  {
+    "real_time": "2025-05-13T20:00:00Z",
+    "category": "us",
+    "headline": "S&P 500 turns positive for 2025",
+    "impact_hint": "Sentiment fully restored"
+  },
+  {
+    "real_time": "2025-05-22T08:00:00Z",
+    "category": "us",
+    "headline": "Moody's downgrades US sovereign rating from Aaa to Aa1",
+    "impact_hint": "Bonds dip, gold bid, equities shrug"
+  },
+  {
+    "real_time": "2025-05-28T20:00:00Z",
+    "category": "us",
+    "headline": "US Court of International Trade rules most Trump tariffs illegal",
+    "impact_hint": "Stocks pop in after-hours"
+  }
+]

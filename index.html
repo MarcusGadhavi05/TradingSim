@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Trading Sim</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d12;
+    --surface: #12151c;
+    --border: #1f242e;
+    --text-primary: #e8ecf3;
+    --text-secondary: #7a8290;
+    --text-muted: #4f5662;
+    --accent: #4d8eff;
+    --pos: #2ecc71;
+    --neg: #e63946;
+    --pos-muted: rgba(46, 204, 113, 0.8);
+    --neg-muted: rgba(230, 57, 70, 0.8);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg); color: var(--text-primary); font-size: 12px;
+    -webkit-font-smoothing: antialiased; }
+  body { display: flex; flex-direction: column; }
+
+  .mono { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+
+  /* SCROLLBARS */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+  /* TOP BAR */
+  .top-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 16px; background: var(--bg); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand-dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; box-shadow: 0 0 8px var(--accent); }
+  .top-bar h1 { margin: 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+  .top-bar .sub { color: var(--text-muted); font-size: 11px; margin-left: 12px; }
+  
+  .timer-wrap { display: flex; align-items: center; gap: 10px; margin-right: 16px; }
+  .timer-dot { width: 6px; height: 6px; background: var(--pos); border-radius: 50%; opacity: 0; transition: opacity 0.3s; }
+  .running .timer-dot { opacity: 1; animation: pulse 2s infinite; }
+  @keyframes pulse { 0% { opacity: 0.4; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.1); } 100% { opacity: 0.4; transform: scale(0.9); } }
+  .timer { font-size: 18px; font-weight: 600; color: var(--text-primary); min-width: 60px; text-align: right; }
+
+  #connect-btn {
+    background: var(--accent); color: white; border: 0; padding: 6px 14px;
+    border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; gap: 6px; transition: all 150ms;
+  }
+  #connect-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  #connect-btn svg { width: 12px; height: 12px; }
+  #connect-btn:disabled { background: var(--border); color: var(--text-muted); cursor: not-allowed; }
+
+  /* MARKET TAPE */
+  .tape {
+    display: flex; gap: 0; padding: 0; background: var(--surface);
+    border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0;
+  }
+  .tape-item {
+    padding: 10px 16px; border-right: 1px solid var(--border); cursor: pointer;
+    flex-shrink: 0; min-width: 130px; transition: background 150ms;
+    position: relative;
+  }
+  .tape-item:hover { background: rgba(255,255,255,0.02); }
+  .tape-item.selected { background: rgba(77, 142, 255, 0.05); }
+  .tape-item.selected::after {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent);
+  }
+  .tape-ticker { font-weight: 600; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+  .tape-data { display: flex; align-items: baseline; gap: 4px; }
+  .tape-px { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+  .tape-dot { color: var(--text-muted); font-size: 8px; align-self: center; }
+  .tape-chg { font-size: 11px; font-weight: 500; }
+
+  /* MAIN GRID */
+  .main {
+    flex: 1; display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 1px; background: var(--border); min-height: 0;
+  }
+  .panel {
+    background: var(--surface); display: flex; flex-direction: column;
+    min-height: 0; overflow: hidden;
+  }
+  .panel-head {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-muted); flex-shrink: 0; font-weight: 600;
+  }
+  .panel-body { flex: 1; overflow: auto; padding: 12px 16px; position: relative; }
+
+  /* CHART */
+  #chart-header { display: flex; align-items: baseline; gap: 12px; }
+  #chart-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+  #chart-spot { font-size: 15px; font-weight: 500; color: var(--text-primary); }
+  #chart-change { font-size: 12px; font-weight: 600; }
+  .date-pill {
+    background: var(--border); color: var(--text-secondary); padding: 3px 10px;
+    border-radius: 20px; font-size: 10px; font-weight: 500; position: absolute; top: 12px; right: 16px; z-index: 5;
+  }
+  #chart-wrap { width: 100%; height: 100%; }
+  #chart-svg { width: 100%; height: 100%; display: block; overflow: visible; }
+
+  /* NEWS */
+  @keyframes fadeSlide { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+  .news-item {
+    border-radius: 4px; padding: 6px 10px; margin-bottom: 8px;
+    background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+    position: relative; animation: fadeSlide 200ms ease-out;
+  }
+  .news-item::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  }
+  .news-item.macro::before { background: #d29922; }
+  .news-item.uk::before    { background: #58a6ff; }
+  .news-item.us::before    { background: #f85149; }
+  .news-item.eu::before    { background: #a371f7; }
+  
+  .news-meta { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .news-cat-dot { width: 4px; height: 4px; border-radius: 50%; }
+  .macro .news-cat-dot { background: #d29922; }
+  .uk .news-cat-dot { background: #58a6ff; }
+  .us .news-cat-dot { background: #f85149; }
+  .eu .news-cat-dot { background: #a371f7; }
+  .news-time { color: var(--text-muted); font-size: 10px; font-weight: 400; }
+  
+  .news-headline { font-weight: 500; line-height: 1.4; font-size: 12px; color: var(--text-primary); }
+  .news-hint { color: var(--text-secondary); font-size: 10px; margin-top: 3px; font-style: italic; }
+
+  /* BOTTOM ORDER PANEL */
+  .order-bar {
+    display: grid; grid-template-columns: 2fr 1fr 1.4fr;
+    gap: 1px; background: var(--border);
+    height: 220px; flex-shrink: 0; border-top: 1px solid var(--border);
+  }
+  .order-section { background: var(--surface); padding: 12px 16px; overflow-y: auto; }
+  .order-section h3 { margin: 0 0 10px; font-size: 10px;
+    color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+
+  .contracts-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .contract-tile {
+    background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; cursor: pointer; transition: all 150ms;
+    display: flex; flex-direction: column;
+  }
+  .contract-tile:hover { border-color: var(--text-muted); }
+  .contract-tile.selected { border-color: var(--accent); border-width: 2px; padding: 9px 11px; background: rgba(77, 142, 255, 0.05); box-shadow: inset 0 0 10px rgba(0,0,0,0.2); }
+  
+  .contract-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 2px; }
+  .contract-type { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+  .contract-strike { color: var(--text-secondary); font-size: 10px; margin-top: 1px; }
+  .contract-premium { font-size: 22px; font-weight: 600; margin-top: auto; color: var(--text-primary); text-align: right; }
+
+  .qty-bar { display: flex; gap: 1px; background: var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 12px; border: 1px solid var(--border); }
+  .qty-input {
+    background: var(--surface); border: 0; color: var(--text-primary);
+    padding: 8px 12px; width: 80px; font-size: 14px; outline: none;
+  }
+  .qty-presets { display: flex; flex: 1; gap: 1px; background: var(--border); }
+  .qty-presets button {
+    flex: 1; background: var(--surface); color: var(--text-secondary); border: 0; padding: 4px;
+    cursor: pointer; font-size: 11px; font-weight: 500; transition: background 150ms;
+  }
+  .qty-presets button:hover { background: var(--border); }
+  .qty-presets button.active { background: var(--accent); color: white; }
+
+  .trade-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .trade-buttons button {
+    padding: 12px; border: 0; border-radius: 4px; cursor: pointer;
+    font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+    transition: all 150ms;
+  }
+  .buy { background: linear-gradient(to bottom, #34d399, #10b981); color: white; }
+  .buy:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+  .sell { background: linear-gradient(to bottom, #f87171, #ef4444); color: white; }
+  .sell:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-1px); }
+  .trade-buttons button:disabled { opacity: 0.3; cursor: not-allowed; filter: grayscale(1); }
+
+  /* PORTFOLIO */
+  .pnl-wrap { margin-bottom: 12px; }
+  .pnl-big { font-size: 28px; font-weight: 700; display: inline-block; padding-bottom: 2px; }
+  .pnl-big.pos { border-bottom: 3px solid var(--pos); }
+  .pnl-big.neg { border-bottom: 3px solid var(--neg); }
+  
+  .port-row { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px; }
+  .port-label { color: var(--text-muted); }
+  .port-val { color: var(--text-secondary); font-weight: 500; }
+
+  .positions-mini { margin-top: 12px; border-radius: 4px; border: 1px solid var(--border); overflow: hidden; }
+  .pos-row {
+    display: grid; grid-template-columns: 1fr 40px 80px;
+    padding: 6px 10px; font-size: 11px; align-items: center;
+  }
+  .pos-row:nth-child(even) { background: rgba(255,255,255,0.02); }
+  .pos-row .pos-name { color: var(--text-primary); font-weight: 500; }
+  .pos-row .pos-qty { text-align: right; color: var(--text-muted); }
+  .pos-row .pos-pnl { text-align: right; font-weight: 600; }
+  
+  .pos { color: var(--pos); }
+  .neg { color: var(--neg); }
+  .placeholder { color: var(--text-muted); text-align: center; padding: 20px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div class="top-bar" id="top-bar">
+  <div class="brand">
+    <div class="brand-dot"></div>
+    <h1>Multi-Asset Derivatives Sim</h1>
+    <span class="sub">March – May 2025 · £100,000 Starting</span>
+  </div>
+  <div style="display:flex; align-items:center;">
+    <div class="timer-wrap">
+      <div class="timer-dot"></div>
+      <span class="timer mono" id="timer">20:00</span>
+    </div>
+    <button id="connect-btn" onclick="startSim()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+      Start Sim
+    </button>
+  </div>
+</div>
+
+<div class="tape" id="tape">
+  <div class="placeholder">Click "Start Sim" to begin market replay...</div>
+</div>
+
+<div class="main">
+  <div class="panel">
+    <div class="panel-head">
+      <div id="chart-header">
+        <span id="chart-title">—</span>
+        <span id="chart-spot" class="mono"></span>
+        <span id="chart-change" class="mono"></span>
+      </div>
+    </div>
+    <div class="panel-body" id="chart-wrap">
+      <div id="chart-realdate" class="date-pill mono"></div>
+      <svg id="chart-svg" preserveAspectRatio="none">
+        <defs>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.5" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+      </svg>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">Market News</div>
+    <div class="panel-body" id="news-container">
+      <div class="placeholder">Headlines will appear as the simulation progresses.</div>
+    </div>
+  </div>
+</div>
+
+<div class="order-bar">
+  <div class="order-section">
+    <h3>Contracts <span id="ord-ticker" style="color:var(--accent); margin-left:8px;" class="mono"></span></h3>
+    <div class="contracts-list" id="contracts-tiles">
+      <div class="placeholder" style="grid-column:1/-1;">Select an underlying ticker from the tape</div>
+    </div>
+  </div>
+
+  <div class="order-section">
+    <h3>Trade</h3>
+    <div class="qty-bar">
+      <input type="number" id="qty-input" class="qty-input mono" value="1" min="1" />
+      <div class="qty-presets">
+        <button data-q="1" class="active" onclick="setQty(1)">1</button>
+        <button data-q="5" onclick="setQty(5)">5</button>
+        <button data-q="10" onclick="setQty(10)">10</button>
+        <button data-q="25" onclick="setQty(25)">25</button>
+      </div>
+    </div>
+    <div class="trade-buttons">
+      <button class="buy" id="buy-btn" onclick="placeOrder(+1)" disabled>Buy</button>
+      <button class="sell" id="sell-btn" onclick="placeOrder(-1)" disabled>Sell</button>
+    </div>
+  </div>
+
+  <div class="order-section">
+    <h3>Portfolio</h3>
+    <div class="pnl-wrap">
+      <div class="pnl-big mono pos" id="total-pnl">£0.00</div>
+    </div>
+    <div class="port-row">
+      <span class="port-label">Cash</span>
+      <span class="port-val mono" id="cash">£100,000.00</span>
+    </div>
+    <div class="port-row">
+      <span class="port-label">Equity</span>
+      <span class="port-val mono" id="equity">£100,000.00</span>
+    </div>
+    <div class="positions-mini" id="positions-mini">
+      <div class="placeholder">No positions held.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let ws = null;
+let simDuration = 1200;
+let tradeQty = 1;
+let selectedUnderlying = null;
+let selectedContractId = null;
+let latestHistory = {};
+let latestMenu = [];
+let latestPrices = {};
+let firstNews = true;
+
+function fmt(x, dp=2) {
+  return Number(x).toLocaleString("en-GB", {minimumFractionDigits: dp, maximumFractionDigits: dp});
+}
+function fmtMoney(x) { return (x<0?"-£":"£") + fmt(Math.abs(x)); }
+function fmtPx(x) {
+  const abs = Math.abs(x);
+  if (abs < 10) return fmt(x, 4);
+  if (abs < 1000) return fmt(x, 2);
+  return fmt(x, 1);
+}
+function shortTicker(t) { return t.replace("=X","").replace("=F","").replace(".L","").replace(".AS","").replace(".DE",""); }
+
+function startSim() {
+  document.getElementById("connect-btn").disabled = true;
+  document.getElementById("connect-btn").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="animation: spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg> Replaying...';
+  document.getElementById("top-bar").classList.add("running");
+  ws = new WebSocket("ws://127.0.0.1:8000/ws");
+  ws.onmessage = (ev) => handle(JSON.parse(ev.data));
+  ws.onclose = () => {
+    document.getElementById("connect-btn").disabled = false;
+    document.getElementById("connect-btn").innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Restart Sim';
+    document.getElementById("top-bar").classList.remove("running");
+  };
+}
+
+const style = document.createElement('style');
+style.innerHTML = `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
+document.head.appendChild(style);
+
+function setQty(q) {
+  tradeQty = q;
+  document.getElementById("qty-input").value = q;
+  document.querySelectorAll(".qty-presets button").forEach(b => {
+    b.classList.toggle("active", Number(b.dataset.q) === q);
+  });
+}
+document.getElementById("qty-input").addEventListener("input", (e) => {
+  tradeQty = Math.max(1, parseInt(e.target.value) || 1);
+  document.querySelectorAll(".qty-presets button").forEach(b => b.classList.remove("active"));
+});
+
+function handle(msg) {
+  if (msg.type === "init") {
+    simDuration = msg.sim_duration_sec;
+    latestMenu = msg.contracts;
+    const tickers = [...new Set(msg.contracts.map(c => c.underlying))];
+    selectedUnderlying = selectedUnderlying || tickers[0];
+    renderTape(tickers);
+    renderContractTiles();
+  } else if (msg.type === "tick") {
+    updateTimer(msg.sim_time);
+    latestHistory = msg.history;
+    latestMenu = msg.menu;
+    latestPrices = msg.prices;
+    updateTape();
+    renderContractTiles();
+    renderPortfolio(msg.portfolio);
+    renderChart(msg.real_time);
+  } else if (msg.type === "news") {
+    renderNews(msg);
+  } else if (msg.type === "sim_complete") {
+    document.getElementById("timer").innerText = "DONE";
+    document.getElementById("top-bar").classList.remove("running");
+  }
+}
+
+function updateTimer(t) {
+  const r = Math.max(0, simDuration - t);
+  const m = Math.floor(r/60), s = Math.floor(r%60);
+  document.getElementById("timer").innerText =
+    String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+}
+
+function renderTape(tickers) {
+  const tape = document.getElementById("tape");
+  tape.innerHTML = tickers.map(t => `
+    <div class="tape-item ${t===selectedUnderlying?"selected":""}"
+         data-ticker="${t}" onclick="selectTicker('${t}')">
+      <div class="tape-ticker">${shortTicker(t)}</div>
+      <div class="tape-data">
+        <span class="tape-px mono" id="px-${cssId(t)}">—</span>
+        <span class="tape-dot">•</span>
+        <span class="tape-chg mono" id="chg-${cssId(t)}"></span>
+      </div>
+    </div>
+  `).join("");
+}
+function cssId(t) { return t.replace(/[^a-zA-Z0-9]/g, "_"); }
+
+function updateTape() {
+  Object.keys(latestPrices).forEach(t => {
+    const px = latestPrices[t];
+    const hist = latestHistory[t] || [];
+    const first = hist.length ? hist[0].px : px;
+    const pct = (px/first - 1) * 100;
+    const pxEl = document.getElementById("px-" + cssId(t));
+    const chgEl = document.getElementById("chg-" + cssId(t));
+    if (pxEl) pxEl.innerText = fmtPx(px);
+    if (chgEl) {
+      chgEl.innerText = (pct>=0?"+":"") + pct.toFixed(2) + "%";
+      chgEl.className = "tape-chg mono " + (pct>=0?"pos":"neg");
+    }
+  });
+}
+
+function selectTicker(t) {
+  selectedUnderlying = t;
+  selectedContractId = null;
+  document.querySelectorAll(".tape-item").forEach(el => {
+    el.classList.toggle("selected", el.dataset.ticker === t);
+  });
+  renderContractTiles();
+  renderChart();
+}
+
+function renderContractTiles() {
+  if (!selectedUnderlying) return;
+  const cs = latestMenu.filter(c => c.underlying === selectedUnderlying);
+  const order = ["bullish", "bearish", "lottery", "hedge"];
+  const labels = {bullish:"Bullish", bearish:"Bearish", lottery:"Lottery", hedge:"Hedge"};
+  const subtitles = {bullish:"Call · Conviction", bearish:"Put · Conviction",
+                     lottery:"Call · Upside", hedge:"Put · Downside"};
+  document.getElementById("ord-ticker").innerText = shortTicker(selectedUnderlying);
+  const tiles = document.getElementById("contracts-tiles");
+  tiles.innerHTML = order.map(kind => {
+    const c = cs.find(x => x.id.endsWith("_" + kind));
+    if (!c) return "";
+    const sel = c.id === selectedContractId ? "selected" : "";
+    return `
+      <div class="contract-tile ${sel}" onclick="selectContract('${c.id}')">
+        <div class="contract-label">${subtitles[kind]}</div>
+        <div class="contract-type">${labels[kind]}</div>
+        <div class="contract-strike mono">Strike ${fmtPx(c.strike)}</div>
+        <div class="contract-premium mono">${fmtPx(c.premium)}</div>
+      </div>`;
+  }).join("");
+
+  const enabled = !!selectedContractId;
+  document.getElementById("buy-btn").disabled = !enabled;
+  document.getElementById("sell-btn").disabled = !enabled;
+}
+
+function selectContract(id) {
+  selectedContractId = id;
+  renderContractTiles();
+}
+
+function renderChart(realTime) {
+  if (!selectedUnderlying || !latestHistory[selectedUnderlying]) return;
+  const hist = latestHistory[selectedUnderlying];
+  if (hist.length < 2) return;
+
+  const svg = document.getElementById("chart-svg");
+  const wrap = document.getElementById("chart-wrap");
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  const xs = hist.map(d => d.t);
+  const ys = hist.map(d => d.px);
+  const xmin = xs[0], xmax = xs[xs.length-1];
+  const ymin = Math.min(...ys), ymax = Math.max(...ys);
+  const yrange = ymax - ymin || 0.01;
+  const ypad = yrange * 0.15;
+  
+  const scaleX = t => ((t - xmin) / Math.max(1e-9, xmax - xmin)) * (W - 80) + 10;
+  const scaleY = p => H - 20 - ((p - (ymin - ypad)) / (yrange + 2*ypad)) * (H - 40);
+
+  const path = hist.map((d,i) => `${i===0?"M":"L"}${scaleX(d.t).toFixed(2)},${scaleY(d.px).toFixed(2)}`).join("");
+  const first = ys[0], last = ys[ys.length-1];
+  const colour = last >= first ? "var(--pos)" : "var(--neg)";
+
+  const gridLines = [ymin, (ymin+ymax)/2, ymax].map(v => {
+    const y = scaleY(v);
+    return `<line x1="0" x2="${W}" y1="${y.toFixed(2)}" y2="${y.toFixed(2)}" stroke="var(--border)" stroke-width="1" opacity="0.3"/>`;
+  }).join("");
+
+  const lastX = scaleX(xmax), lastY = scaleY(last);
+  const tag = `
+    <g transform="translate(${lastX + 5}, ${lastY - 10})">
+      <rect width="55" height="20" rx="4" fill="${colour}" />
+      <text x="27.5" y="14" fill="white" font-size="10" font-family="JetBrains Mono" font-weight="600" text-anchor="middle">${fmtPx(last)}</text>
+    </g>
+  `;
+
+  svg.innerHTML = `
+    ${gridLines}
+    <path d="${path}" fill="none" stroke="${colour}" stroke-width="1.5" filter="url(#glow)" />
+    ${tag}
+  `;
+
+  document.getElementById("chart-title").innerText = shortTicker(selectedUnderlying);
+  document.getElementById("chart-spot").innerText = fmtPx(last);
+  const pct = ((last/first - 1) * 100);
+  const chg = document.getElementById("chart-change");
+  chg.innerText = (pct>=0?"+":"") + pct.toFixed(2) + "%";
+  chg.className = "mono " + (pct >= 0 ? "pos" : "neg");
+  if (realTime) {
+    document.getElementById("chart-realdate").innerText = realTime.slice(0, 10);
+  }
+}
+
+function renderPortfolio(p) {
+  const el = document.getElementById("total-pnl");
+  el.innerText = fmtMoney(p.total_pnl);
+  el.className = "pnl-big mono " + (p.total_pnl >= 0 ? "pos" : "neg");
+  document.getElementById("cash").innerText = fmtMoney(p.cash);
+  document.getElementById("equity").innerText = fmtMoney(p.equity);
+
+  const body = document.getElementById("positions-mini");
+  if (p.positions.length === 0) {
+    body.innerHTML = '<div class="placeholder">No positions.</div>';
+    return;
+  }
+  body.innerHTML = p.positions.map(pos => `
+    <div class="pos-row">
+      <div class="pos-name">${pos.label.replace(/ \(.*\)/, "")}</div>
+      <div class="pos-qty mono">${pos.quantity}</div>
+      <div class="pos-pnl mono ${pos.pnl >= 0 ? "pos" : "neg"}">${fmtMoney(pos.pnl)}</div>
+    </div>`).join("");
+}
+
+function renderNews(n) {
+  const c = document.getElementById("news-container");
+  if (firstNews) { c.innerHTML = ""; firstNews = false; }
+  const d = document.createElement("div");
+  d.className = "news-item " + n.category;
+  d.innerHTML = `
+    <div class="news-meta">
+      <div class="news-cat-dot"></div>
+      <div class="news-time mono">${n.real_time.slice(0,10)}</div>
+    </div>
+    <div class="news-headline">${n.headline}</div>
+    <div class="news-hint">${n.impact_hint}</div>`;
+  c.prepend(d);
+}
+
+function placeOrder(direction) {
+  if (!ws || ws.readyState !== 1 || !selectedContractId) return;
+  const qty = direction * Math.max(1, parseInt(document.getElementById("qty-input").value) || 1);
+  ws.send(JSON.stringify({type: "order", contract_id: selectedContractId, quantity: qty}));
+}
+
+window.addEventListener("resize", () => renderChart());
+</script>
+
+</body>
+</html>
