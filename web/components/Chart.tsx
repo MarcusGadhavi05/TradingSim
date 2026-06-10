@@ -8,6 +8,7 @@ type ChartProps = {
   mode: "line" | "area";
   timeMap: Record<number, string>;
   ticker: string;
+  color?: string;
 };
 
 const fmtPx = (x: number) => {
@@ -18,13 +19,10 @@ const fmtPx = (x: number) => {
   return x.toLocaleString("en-GB", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 };
 
-export default function Chart({ hist, mode, timeMap, ticker }: ChartProps) {
+export default function Chart({ hist, mode, timeMap, ticker, color = "#7c5cff" }: ChartProps) {
   const data = useMemo(() => {
-    // Transform history into Tremor-friendly format
-    // Ensure the date is as unique as possible to avoid rendering issues
     return hist.map((d, idx) => {
       const timeStr = timeMap[Math.floor(d.t)];
-      // If timeStr is missing, we use a placeholder or the index to keep the line moving
       return {
         date: timeStr || `T-${hist.length - idx}`,
         price: d.px,
@@ -41,19 +39,55 @@ export default function Chart({ hist, mode, timeMap, ticker }: ChartProps) {
   }
 
   return (
-    <div className="w-full h-full p-4">
+    <div className="w-full h-full p-4 chart-container" style={{ "--chart-color": color } as any}>
+      <style jsx>{`
+        .chart-container :global(.recharts-line-path),
+        .chart-container :global(.recharts-area-curve) {
+          stroke: var(--chart-color) !important;
+          stroke-width: 2.5px;
+          filter: drop-shadow(0 0 6px var(--chart-color));
+        }
+        .chart-container :global(.recharts-area-area) {
+          fill: url(#chartFill) !important;
+        }
+        .chart-container :global(.recharts-cartesian-grid line) {
+          stroke: rgba(255, 255, 255, 0.05) !important;
+        }
+        .chart-container :global(.recharts-cartesian-axis-tick-value) {
+          fill: rgba(255, 255, 255, 0.35) !important;
+          font-size: 9px;
+        }
+        .chart-container :global(.recharts-label) {
+          fill: rgba(255, 255, 255, 0.4) !important;
+          font-size: 9px;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+      `}</style>
+
+      <svg width="0" height="0" style={{ position: "absolute" }}>
+        <defs>
+          <linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+      </svg>
+
       <AreaChart
         className="h-full"
         data={data}
         index="date"
         categories={["price"]}
-        colors={["violet"]}
+        colors={["neutral"]}
         valueFormatter={fmtPx}
         showLegend={false}
-        showGridLines={false}
+        showGridLines={true}
         showAnimation={false}
-        yAxisWidth={50}
+        yAxisWidth={56}
         autoMinValue={true}
+        xAxisLabel="Session Time"
+        yAxisLabel="Price"
       />
     </div>
   );

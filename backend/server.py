@@ -24,7 +24,7 @@ ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
 
-SIM_DURATION_SEC = 20 * 60
+SIM_DURATION_SEC = 60 * 60
 TICK_HZ          = 1
 HISTORY_LEN      = 240   # 60s of history at 4Hz, plenty for a chart
 

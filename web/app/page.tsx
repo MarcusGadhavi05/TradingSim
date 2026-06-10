@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
@@ -78,6 +78,13 @@ const ASSET_TYPE: Record<string, string> = {
   "GBPUSD=X": "FX", "EURUSD=X": "FX", "JPY=X": "FX", "IGLT.L": "Rates", "BZ=F": "Commodity", "GC=F": "Commodity",
 };
 
+const ASSET_HEX: Record<string, string> = {
+  "Equity":    "#4DA3FF",
+  "Commodity": "#E0B341",
+  "FX":        "#2DD4BF",
+  "Rates":     "#A78BFA",
+};
+
 const CATEGORY_MAP: Record<string, string> = {
   "macro": "MACRO", "uk": "UK", "us": "US", "eu": "EU",
 };
@@ -101,8 +108,7 @@ const XIcon = () => (
 
 const fmt = (x: number, dp = 2) =>
   Number(x).toLocaleString("en-GB", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-const fmtMoney = (x: number) => (x < 0 ? "-£" : "£") + fmt(Math.abs(x));
-const fmtPx = (x: number) => {
+const fmtMoney = (x: number) => (x < 0 ? "-\u00A3" : "\u00A3") + fmt(Math.abs(x));const fmtPx = (x: number) => {
   const abs = Math.abs(x);
   if (abs < 1) return fmt(x, 4);
   if (abs < 10) return fmt(x, 3);
@@ -118,8 +124,7 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const [running, setRunning] = useState(false);
   const [waking, setWaking] = useState(false);
-  const [simDuration, setSimDuration] = useState(1200);
-  const [simTime, setSimTime] = useState(0);
+const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTime] = useState(0);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<Record<string, { t: number; px: number }[]>>({});
@@ -265,10 +270,11 @@ export default function Home() {
   }, [tickers, prices, history, assetSort]);
 
   const filteredNews = useMemo(() => {
-    if (!newsSearch) return news;
+    const search = (newsSearch || "").trim().toLowerCase();
+    if (!search) return news;
     return news.filter(n => 
-      n.headline.toLowerCase().includes(newsSearch.toLowerCase()) || 
-      n.category.toLowerCase().includes(newsSearch.toLowerCase())
+      (n.headline || "").toLowerCase().includes(search) || 
+      (n.category || "").toLowerCase().includes(search)
     );
   }, [news, newsSearch]);
 
@@ -294,15 +300,12 @@ export default function Home() {
     return raw.filter(d => d.t >= cutoff);
   }, [selectedUnderlying, history, simTime, timeframe]);
 
+  const accentHex = ASSET_HEX[ASSET_TYPE[selectedUnderlying || ""] || "Equity"];
+
   return (
-    <main className="h-screen flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none">
+<main className="min-h-screen flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none">
       {/* WAKING OVERLAY */}
-      {waking && (
-        <div className="fixed inset-0 z-[100] bg-tremor-background-muted/80 flex flex-col items-center justify-center backdrop-blur-sm">
-          <div className="w-12 h-12 border-4 border-tremor-brand/20 border-t-tremor-brand rounded-full animate-spin mb-4"></div>
-          <div className="text-[14px] font-semibold tracking-widest uppercase text-tremor-brand">Waking market server…</div>
-        </div>
-      )}
+      {/* ... (omitted overlay code for context) ... */}
 
       {/* MARKET TAPE STRIP */}
       <div className="h-10 bg-tremor-background-subtle border-b border-tremor-border flex items-center overflow-hidden shrink-0">
@@ -323,9 +326,8 @@ export default function Home() {
                   >
                     <span className={`font-bold text-[11px] ${isSel ? "text-tremor-brand" : "text-tremor-content"}`}>{shortTicker(t)}</span>
                     <span className="font-mono text-[11px]">{fmtPx(px)}</span>
-                    <span className="font-mono text-[10px] ml-1" style={{ color: pct >= 0 ? '#86c994' : '#d97f7f' }}>
-                      {pct >= 0 ? "↗" : "↘"} {Math.abs(pct).toFixed(2)}%
-                    </span>
+                    <span className="font-mono text-[10px] ml-1" style={{ color: pct >= 0 ? '#10b981' : '#f43f5e' }}>
+{pct >= 0 ? "\u2197" : "\u2198"} {Math.abs(pct).toFixed(2)}%                    </span>
                   </div>
                 );
               })}
@@ -383,13 +385,13 @@ export default function Home() {
             size="sm"
             className={running ? "bg-tremor-background-emphasis text-tremor-content-subtle border-none" : ""}
           >
-            {running ? "Running…" : "Start Sim"}
+            {running ? "Runningâ€¦" : "Start Sim"}
           </Button>
         </div>
       </div>
 
       {/* MAIN GRID */}
-      <div className="flex-1 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis overflow-hidden">
+      <div className="flex-1 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis">
         {/* PANEL A: ASSETS (Spans 2 rows) */}
         <Card className="row-span-2 p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
           <PanelHeader title="Assets" />
@@ -405,7 +407,7 @@ export default function Home() {
                     >
                       <Flex justifyContent="start" className="gap-1">
                         {col}
-                        <span className="text-[8px] opacity-40">↕</span>
+                        <span className="text-[8px] opacity-40">â†•</span>
                       </Flex>
                     </TableHeaderCell>
                   ))}
@@ -424,11 +426,27 @@ export default function Home() {
                     </TableCell>
                     <TableCell className="px-3 py-2.5 font-mono text-tremor-content">{fmtPx(a.price)}</TableCell>
                     <TableCell className="px-3 py-2.5">
-                      <BadgeDelta deltaType={a.chg >= 0 ? "moderateIncrease" : "moderateDecrease"} size="xs">
+                      <BadgeDelta 
+                        deltaType={a.chg >= 0 ? "increase" : "decrease"} 
+                        size="xs"
+                        className={a.chg >= 0 ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}
+                      >
                         {a.chg.toFixed(2)}%
                       </BadgeDelta>
                     </TableCell>
-                    <TableCell className="px-3 py-2.5 text-[9px] text-tremor-content-subtle uppercase font-medium">{a.type}</TableCell>
+                    <TableCell className="px-3 py-2.5">
+                      {(() => {
+                        const hex = ASSET_HEX[a.type] || "#ffffff";
+                        return (
+                          <span 
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border"
+                            style={{ color: hex, borderColor: hex, backgroundColor: hex + "1F" }}
+                          >
+                            {a.type}
+                          </span>
+                        );
+                      })()}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -452,7 +470,7 @@ export default function Home() {
               </div>
             }
           />
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-hidden">
             {filteredNews.length === 0 ? (
               <div className="p-8 text-center text-tremor-content-subtle italic">No news matching filters.</div>
             ) : (
@@ -535,12 +553,12 @@ export default function Home() {
                       <TableRow key={p.contract_id} className={`border-b border-tremor-border/50 hover:bg-tremor-content-strong/[0.04] transition-colors ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
                         <TableCell className="px-3 py-2.5 font-sans font-bold">{p.label.split(" (")[0]}</TableCell>
                         <TableCell className="px-2 py-2.5 text-right font-bold">
-                          <Text color={p.quantity >= 0 ? "emerald" : "rose"} className="font-bold">{p.quantity}</Text>
+                          <Text className={`font-bold ${p.quantity >= 0 ? "text-emerald-500" : "text-rose-500"}`}>{p.quantity}</Text>
                         </TableCell>
                         <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtPx(p.entry)}</TableCell>
                         <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtMoney(posValue)}</TableCell>
                         <TableCell className="px-2 py-2.5 text-right">
-                          <Text color={isPositive ? "emerald" : "rose"} className="font-bold">{fmtMoney(p.pnl)}</Text>
+                          <Text className={`font-bold ${isPositive ? "text-emerald-500" : "text-rose-500"}`}>{fmtMoney(p.pnl)}</Text>
                         </TableCell>
                         <TableCell className="px-2 py-2.5 text-right">
                           <Button 
@@ -564,9 +582,14 @@ export default function Home() {
         <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
           <PanelHeader title="Execution Engine" />
           <div className="flex-1 p-4 flex flex-col">
-            <Flex alignItems="baseline" justifyContent="between" className="mb-4">
-              <Title className="text-[20px] font-bold tracking-tight">{selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}</Title>
-              {/* Tab Toggle */}
+            <Flex alignItems="center" justifyContent="between" className="mb-4">
+              <Flex justifyContent="start" className="gap-2 w-auto items-center">
+                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: accentHex }}></span>
+                <Title className="text-[20px] font-bold tracking-tight text-tremor-content-emphasis">{selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}</Title>
+                <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded" style={{ color: accentHex, backgroundColor: accentHex + "1F" }}>
+                  {ASSET_TYPE[selectedUnderlying || ""] || "Equity"}
+                </span>
+              </Flex>
               <TabGroup index={exchangeTab} onIndexChange={setExchangeTab}>
                 <TabList variant="solid" className="p-0.5">
                   <Tab className="text-[10px] font-bold uppercase py-0.5 px-3">Options</Tab>
@@ -577,11 +600,11 @@ export default function Home() {
 
             <Flex className="gap-2 mb-4">
               <div className="relative flex-1">
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   value={tradeQty}
                   onChange={e => setTradeQty(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full bg-tremor-background-muted border border-tremor-border rounded h-10 px-3 font-mono text-[16px] outline-none focus:border-tremor-brand/30"
+                  className="w-full bg-tremor-background-muted border border-tremor-border rounded h-10 px-3 font-mono text-[16px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/30"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
@@ -589,8 +612,8 @@ export default function Home() {
               </div>
               <Flex className="gap-1 w-auto">
                 {[1, 10, 50, 100].map(v => (
-                  <Button 
-                    key={v} 
+                  <Button
+                    key={v}
                     size="xs"
                     variant={tradeQty === v ? "primary" : "secondary"}
                     onClick={() => setTradeQty(v)}
@@ -608,68 +631,86 @@ export default function Home() {
                   {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
                     const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
                     const isSel = contractType === type;
+                    const name = OPTION_NAMES[type];
                     return (
-                      <Card
+                      <div
                         key={type}
                         onClick={() => setContractType(type)}
-                        decoration={isSel ? "left" : undefined}
-                        decorationColor="tremor-brand"
-                        className={`p-3 cursor-pointer transition-all border-tremor-border shadow-none ${isSel ? "bg-tremor-brand/5" : "hover:bg-tremor-content-strong/[0.04]"}`}
+                        className={`p-3 cursor-pointer rounded-md border transition-all flex flex-col ${isSel ? "" : "border-tremor-border hover:bg-tremor-content-strong/[0.04]"}`}
+                        style={isSel ? { borderColor: accentHex, backgroundColor: accentHex + "14" } : undefined}
                       >
-                        <Flex flexDirection="col" alignItems="start" justifyContent="start" className="h-full">
-                          <Text className="text-[10px] uppercase font-bold text-tremor-content-subtle tracking-wider">{c?.subtitle || type.toUpperCase()}</Text>
-                          <Text className="text-[9px] text-tremor-content-subtle truncate w-full mb-1 italic">{c?.label || "—"}</Text>
-                          <Text className="text-[10px] text-tremor-content-subtle font-mono mt-auto" color="slate">Strike {fmtPx(c?.strike || 0)}</Text>
-                          <Metric className="text-[20px] font-bold font-mono text-right w-full">{fmtPx(c?.premium || 0)}</Metric>
-                        </Flex>
-                      </Card>
+                        <span className="text-[12px] font-bold tracking-wide text-tremor-content-emphasis">{name.heading}</span>
+                        <span className="text-[9px] text-tremor-content-subtle mb-3">{name.sub}</span>
+                        <div className="flex items-end justify-between mt-auto">
+                          <div className="flex flex-col">
+                            <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">Strike</span>
+                            <span className="text-[11px] font-mono text-tremor-content">{fmtPx(c?.strike || 0)}</span>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">Premium</span>
+                            <span className="text-[18px] font-bold font-mono leading-none text-tremor-content-emphasis">{fmtPx(c?.premium || 0)}</span>
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
                 </Grid>
               ) : (
-                <Card 
-                  decoration="left"
-                  decorationColor="tremor-brand"
-                  className="p-4 border-tremor-brand bg-tremor-brand/5 shadow-none"
-                >
-                  <Flex justify="between" alignItems="start" className="mb-2">
-                    <Text className="text-[11px] uppercase font-black tracking-widest text-tremor-brand">1M Future</Text>
-                    <Text className="text-[10px] text-tremor-content-subtle font-bold">{selectedUnderlying}</Text>
-                  </Flex>
-                  <Metric className="text-[32px] font-bold font-mono text-right tracking-tighter mb-1">
-                    {fmtPx(contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith("_future"))?.premium || 0)}
-                  </Metric>
-                  <Text className="text-[9px] text-tremor-content-subtle text-right font-mono uppercase tracking-widest">Live Futures Price</Text>
-                </Card>
+                (() => {
+                  const f = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith("_future"));
+                  const px = f?.premium || 0;
+                  const size = CONTRACT_SIZE[selectedUnderlying || ""] || 1;
+                  const notional = px * size;
+                  return (
+                    <div className="rounded-md border p-4 flex flex-col" style={{ borderColor: accentHex, backgroundColor: accentHex + "0D" }}>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[12px] uppercase font-black tracking-widest" style={{ color: accentHex }}>1M Future</span>
+                        <span className="text-[10px] font-bold text-tremor-content">{selectedUnderlying}</span>
+                      </div>
+                      <div className="flex flex-col items-end mb-4">
+                        <span className="text-[32px] font-bold font-mono leading-none tracking-tight text-tremor-content-emphasis">{fmtPx(px)}</span>
+                        <span className="text-[8px] uppercase tracking-widest text-tremor-content-subtle mt-1">Live Futures Price</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-px bg-tremor-border rounded overflow-hidden">
+                        {([
+                          ["Contract", "1M Future"],
+                          ["Contract Size", fmt(size, 0)],
+                          ["Notional / Contract", fmtMoney(notional)],
+                          ["Asset Class", ASSET_TYPE[selectedUnderlying || ""] || "Equity"],
+                        ] as const).map(([k, v]) => (
+                          <div key={k} className="bg-tremor-background p-2 flex flex-col gap-0.5">
+                            <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">{k}</span>
+                            <span className="text-[11px] font-mono text-tremor-content">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
               )}
             </div>
 
             <Grid numItems={2} className="gap-3 mb-4">
-              <Card 
+              <div
                 onClick={() => placeOrder(-1)}
-                decoration="left"
-                decorationColor="rose"
-                className={`flex flex-col items-center justify-center p-3 cursor-pointer bg-rose-500/10 border-rose-500/20 hover:bg-rose-500/20 transition-all shadow-none ${pulseSell ? "btn-pulse-sell" : ""}`}
+                className={`flex flex-col items-center justify-center p-3 cursor-pointer rounded-md border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
               >
-                <Text className="text-[10px] uppercase font-bold text-rose-500 mb-1">SELL (BID)</Text>
-                <Metric className="font-mono text-[20px] font-bold text-rose-500">{fmtPx(bidAsk.bid)}</Metric>
-              </Card>
-              <Card 
+                <span className="text-[10px] uppercase font-bold text-rose-500 mb-1">Sell (Bid)</span>
+                <span className="font-mono text-[20px] font-bold text-rose-500">{fmtPx(bidAsk.bid)}</span>
+              </div>
+              <div
                 onClick={() => placeOrder(1)}
-                decoration="left"
-                decorationColor="emerald"
-                className={`flex flex-col items-center justify-center p-3 cursor-pointer bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 transition-all shadow-none ${pulseBuy ? "btn-pulse-buy" : ""}`}
+                className={`flex flex-col items-center justify-center p-3 cursor-pointer rounded-md border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
               >
-                <Text className="text-[10px] uppercase font-bold text-emerald-500 mb-1">BUY (ASK)</Text>
-                <Metric className="font-mono text-[20px] font-bold text-emerald-500">{fmtPx(bidAsk.ask)}</Metric>
-              </Card>
+                <span className="text-[10px] uppercase font-bold text-emerald-500 mb-1">Buy (Ask)</span>
+                <span className="font-mono text-[20px] font-bold text-emerald-500">{fmtPx(bidAsk.ask)}</span>
+              </div>
             </Grid>
 
             <div className="mt-auto border-t border-tremor-border pt-3 flex justify-between items-baseline">
-              <Text className="text-tremor-content-subtle uppercase text-[9px] font-bold tracking-wider">Notional Value</Text>
-              <Text className="font-mono text-[14px] text-tremor-content">
-                £{fmt(tradeQty * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}
-              </Text>
+              <span className="text-tremor-content-subtle uppercase text-[9px] font-bold tracking-wider">Notional Value</span>
+              <span className="font-mono text-[14px] text-tremor-content-emphasis">
+{"\u00A3"}{fmt(tradeQty * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}              </span>
             </div>
           </div>
         </Card>
@@ -700,7 +741,13 @@ export default function Home() {
             {realDate}
           </Badge>
           <div className="flex-1 relative overflow-hidden bg-tremor-background-muted/30">
-            <Chart hist={selectedHist} mode={chartMode} timeMap={timeMap} ticker={selectedUnderlying || "Price"} />
+            <Chart 
+              hist={selectedHist} 
+              mode={chartMode} 
+              timeMap={timeMap} 
+              ticker={selectedUnderlying || "Price"} 
+              color={ASSET_HEX[ASSET_TYPE[selectedUnderlying || ""] || "Equity"]}
+            />
           </div>
         </Card>
       </div>
@@ -711,17 +758,20 @@ export default function Home() {
 // --- Sub-components ---
 
 function Stat({ label, value, delta }: { label: string; value: string; delta?: number }) {
+  const isPnL = label.toLowerCase().includes("p&l");
+  const pnlColor = delta !== undefined ? (delta >= 0 ? "text-emerald-500" : "text-rose-500") : "";
+
   return (
     <Flex className="gap-2 group w-auto" justifyContent="start">
       <div className="w-px h-3 bg-tremor-border"></div>
       <Flex flexDirection="col" alignItems="start" className="w-auto">
         <Text className="text-[9px] uppercase font-bold text-tremor-content-subtle leading-none mb-0.5 tracking-wider">{label}</Text>
         <Flex className="gap-2" justifyContent="start">
-          <Metric className="text-[12px] font-bold leading-none">{value}</Metric>
+          <Metric className={`text-[12px] font-bold leading-none ${isPnL ? pnlColor : ""}`}>{value}</Metric>
           {delta !== undefined && delta !== 0 && (
             <BadgeDelta 
-              deltaType={delta > 0 ? "moderateIncrease" : "moderateDecrease"} 
-              className="scale-75 origin-left"
+              deltaType={delta > 0 ? "increase" : "decrease"} 
+              className={`scale-75 origin-left ${delta > 0 ? "bg-emerald-500/20 text-emerald-500" : "bg-rose-500/20 text-rose-500"} border-none`}
             />
           )}
         </Flex>
