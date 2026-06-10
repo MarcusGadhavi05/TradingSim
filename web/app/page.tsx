@@ -131,7 +131,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [selectedUnderlying, setSelectedUnderlying] = useState<string | null>(null);
-  const [tradeQty, setTradeQty] = useState(1);
+  const [tradeQty, setTradeQty] = useState<number | "">("");
   const [exchangeTab, setExchangeTab] = useState<number>(0); // 0: Options, 1: Futures
   const [contractType, setContractType] = useState<string>("bullish");
   const [realDate, setRealDate] = useState<string>("");
@@ -189,6 +189,8 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         setClosingPositions(new Set());
       } else if (msg.type === "news") {
         setNews((prev) => [msg, ...prev]);
+      } else if (msg.type === "quote") {
+        setQuote({ bid: msg.bid, ask: msg.ask });
       } else if (msg.type === "sim_complete") {
         setRunning(false);
       }
@@ -283,11 +285,19 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
     return contracts.find(c => c.underlying === selectedUnderlying && c.id.endsWith(`_${suffix}`));
   }, [contracts, selectedUnderlying, contractType, exchangeTab]);
 
-  const bidAsk = useMemo(() => {
-    if (!selectedContract) return { bid: 0, ask: 0 };
-    const mid = selectedContract.premium;
-    return { bid: mid * 0.998, ask: mid * 1.002 };
-  }, [selectedContract]);
+  const [quote, setQuote] = useState<{ bid: number; ask: number }>({ bid: 0, ask: 0 });
+
+  // Request a size-adjusted quote whenever the contract or quantity changes
+  useEffect(() => {
+    if (!wsRef.current || wsRef.current.readyState !== 1 || !selectedContract) return;
+    wsRef.current.send(JSON.stringify({
+      type: "quote_request",
+      contract_id: selectedContract.id,
+      quantity: Math.max(1, tradeQty),
+    }));
+  }, [selectedContract, tradeQty]);
+
+  const bidAsk = quote;
 
   const remaining = Math.max(0, simDuration - simTime);
   const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
@@ -602,7 +612,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                 <input
                   type="number"
                   value={tradeQty}
-                  onChange={e => setTradeQty(Math.max(1, parseInt(e.target.value) || 1))}
+                  onChange={e => setTradeQty(e.target.value === "" ? "" : Math.max(1, parseInt(e.target.value) || 1))}
                   className="w-full bg-tremor-background-muted border border-tremor-border rounded h-10 px-3 font-mono text-[16px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/30"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none">

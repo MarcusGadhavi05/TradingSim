@@ -16,9 +16,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
-from contracts import build_menu, price_contract, Contract
+from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-
 
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
@@ -85,10 +84,28 @@ class SimSession:
         if not contract or qty == 0:
             return {"type": "error", "message": "Invalid order"}
         spot = self.current_prices[contract.underlying]
-        premium = price_contract(contract, spot)
-        note = self.portfolio.trade(contract, qty, premium)
-        return {"type": "order_ack", "message": note}
+        quote = liquidity_quote(contract, spot, qty)
+        # Buy fills at ask, sell fills at bid — same spread the user was quoted
+        fill = quote["ask"] if qty > 0 else quote["bid"]
+        note = self.portfolio.trade(contract, qty, fill)
+        return {"type": "order_ack", "message": note, "fill": fill}
 
+    def handle_quote(self, msg: dict) -> dict:
+        cid = msg.get("contract_id")
+        qty = int(msg.get("quantity", 1))
+        contract = self.contracts_by_id.get(cid)
+        if not contract:
+            return {"type": "quote", "bid": 0, "ask": 0}
+        spot = self.current_prices[contract.underlying]
+        q = liquidity_quote(contract, spot, qty)
+        return {
+            "type": "quote",
+            "contract_id": cid,
+            "quantity": qty,
+            "bid": q["bid"],
+            "ask": q["ask"],
+            "mid": q["mid"],
+        }
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
@@ -109,6 +126,8 @@ async def ws_endpoint(websocket: WebSocket):
                 if msg.get("type") == "order":
                     ack = session.handle_order(msg)
                     await websocket.send_json(ack)
+                elif msg.get("type") == "quote_request":
+                    await websocket.send_json(session.handle_quote(msg))
         except WebSocketDisconnect:
             session.running = False
 

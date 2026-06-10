@@ -113,6 +113,54 @@ def price_contract(contract: Contract, spot: float) -> float:
         option_type=contract.option_type,
     )
 
+def bs_vega(spot: float, strike: float, t: float, r: float, iv: float) -> float:
+    """Black-Scholes vega (per 1.00 change in vol), per unit of underlying."""
+    if iv <= 0 or t <= 0:
+        return 0.0
+    d1 = (log(spot / strike) + (r + 0.5 * iv ** 2) * t) / (iv * sqrt(t))
+    return spot * NormalDist().pdf(d1) * sqrt(t)
+
+
+# Per-instrument base liquidity (half-spread in fraction of mid, at clip size).
+# Tighter = more liquid. FX & large caps tight; gilts/NVDA/commodities wider.
+LIQUIDITY_BASE = {
+    "EURUSD=X": 0.0005, "GBPUSD=X": 0.0006, "JPY=X": 0.0008,
+    "SPY": 0.0008, "AZN.L": 0.0010, "ASML.AS": 0.0012,
+    "SAP.DE": 0.0012, "BARC.L": 0.0015, "GC=F": 0.0012,
+    "BZ=F": 0.0018, "NVDA": 0.0020, "IGLT.L": 0.0025,
+}
+
+# "Normal" order size for each instrument (the clip the base spread assumes).
+LIQUIDITY_CLIP = {
+    "GBPUSD=X": 50, "EURUSD=X": 50, "JPY=X": 50,
+    "IGLT.L": 20, "BZ=F": 15, "GC=F": 15,
+}  # default 10 for equities/options
+
+IMPACT_COEFF = 0.0015  # how hard size widens the spread
+
+
+def liquidity_quote(contract: Contract, spot: float, qty: int) -> dict:
+    """Return size-adjusted bid/ask for an order of `qty` contracts."""
+    mid = price_contract(contract, spot)
+    base = LIQUIDITY_BASE.get(contract.underlying, 0.0020)
+    clip = LIQUIDITY_CLIP.get(contract.underlying, 10)
+
+    # Options: widen base by vega (more risk warehoused = wider quote)
+    if contract.option_type != "future":
+        vega = bs_vega(spot, contract.strike, T_YEARS, R, contract.iv)
+        # normalise vega against mid so the bump is proportionate
+        vega_factor = 1.0 + min(2.0, (vega / mid) if mid > 0 else 0.0)
+        base *= vega_factor
+
+    size_penalty = IMPACT_COEFF * sqrt(max(1, abs(qty)) / clip)
+    half = base + size_penalty
+
+    return {
+        "mid": mid,
+        "bid": mid * (1 - half),
+        "ask": mid * (1 + half),
+        "half_spread": half,
+    }
 
 # Quick self-test
 if __name__ == "__main__":

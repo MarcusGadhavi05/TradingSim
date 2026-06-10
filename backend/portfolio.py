@@ -41,40 +41,45 @@ class Portfolio:
     closed_pnl: float = 0.0     # realised P&L from closed trades
 
     def trade(self, contract: Contract, quantity: int, current_premium: float) -> str:
-        """Buy (quantity > 0) or sell (quantity < 0) a contract."""
+        """Buy (quantity > 0) or sell (quantity < 0) a contract.
+        `current_premium` is the EXECUTION price (already spread-adjusted)."""
         size = CONTRACT_SIZE.get(contract.underlying, 1)
         is_future = contract.option_type == "future"
-        
-        # Options have an upfront premium (cost); futures don't (simplified margin-free model)
+
         if not is_future:
             cost = quantity * current_premium * size
             self.cash -= cost
 
-        # Check for existing position to net against
-        for pos in self.positions:
-            if pos.contract_id == contract.contract_id:
-                # Same direction: average up
-                if (pos.quantity > 0 and quantity > 0) or (pos.quantity < 0 and quantity < 0):
-                    total_q = pos.quantity + quantity
-                    pos.entry_price = (
-                        (pos.entry_price * pos.quantity + current_premium * quantity) / total_q
-                    )
-                    pos.quantity = total_q
-                else:
-                    # Opposite direction: close some/all
-                    closing = min(abs(quantity), abs(pos.quantity))
-                    sign = 1 if pos.quantity > 0 else -1
-                    realised = sign * closing * (current_premium - pos.entry_price) * size
-                    self.closed_pnl += realised
-                    if is_future:
-                        # For futures, realised P&L directly affects cash
-                        self.cash += realised
-                    pos.quantity += quantity
-                    if pos.quantity == 0:
-                        self.positions.remove(pos)
-                return f"Updated position {contract.contract_id}: qty now {pos.quantity if pos in self.positions else 0}"
+        # Find existing position WITHOUT mutating the list mid-iteration
+        existing = next(
+            (p for p in self.positions if p.contract_id == contract.contract_id),
+            None,
+        )
 
-        # New position
+        if existing is not None:
+            same_dir = (existing.quantity > 0 and quantity > 0) or \
+                       (existing.quantity < 0 and quantity < 0)
+            if same_dir:
+                total_q = existing.quantity + quantity
+                existing.entry_price = (
+                    (existing.entry_price * existing.quantity + current_premium * quantity) / total_q
+                )
+                existing.quantity = total_q
+            else:
+                closing = min(abs(quantity), abs(existing.quantity))
+                sign = 1 if existing.quantity > 0 else -1
+                realised = sign * closing * (current_premium - existing.entry_price) * size
+                self.closed_pnl += realised
+                if is_future:
+                    self.cash += realised
+                existing.quantity += quantity
+
+            # Remove only AFTER all mutation is done
+            new_qty = existing.quantity
+            if new_qty == 0:
+                self.positions.remove(existing)
+            return f"Updated position {contract.contract_id}: qty now {new_qty}"
+
         self.positions.append(Position(
             contract_id=contract.contract_id,
             quantity=quantity,
