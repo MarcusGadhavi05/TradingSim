@@ -293,7 +293,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
     wsRef.current.send(JSON.stringify({
       type: "quote_request",
       contract_id: selectedContract.id,
-      quantity: Math.max(1, tradeQty),
+      quantity: Math.max(1, Number(tradeQty) || 1),
     }));
   }, [selectedContract, tradeQty]);
 
@@ -719,7 +719,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
             <div className="mt-auto border-t border-tremor-border pt-3 flex justify-between items-baseline">
               <span className="text-tremor-content-subtle uppercase text-[9px] font-bold tracking-wider">Notional Value</span>
               <span className="font-mono text-[14px] text-tremor-content-emphasis">
-{"\u00A3"}{fmt(tradeQty * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}              </span>
+{"\u00A3"}{fmt((Number(tradeQty) || 0) * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}             </span>
             </div>
           </div>
         </Card>
