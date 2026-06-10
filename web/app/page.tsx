@@ -203,7 +203,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
       if (!wsRef.current || wsRef.current.readyState !== 1 || !selectedUnderlying) return;
       const suffix = exchangeTab === 1 ? "future" : contractType;
       const contractId = `${selectedUnderlying}_${suffix}`;
-      const qty = direction * Math.max(1, tradeQty);
+      const qty = direction * Math.max(1, Number(tradeQty) || 1);
       
       if (direction === 1) {
         setPulseBuy(true);
