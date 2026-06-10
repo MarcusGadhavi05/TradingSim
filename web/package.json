@@ -1,4 +1,5 @@
 {
+  "overrides": { "react": "$react", "react-dom": "$react-dom" },
   "name": "trading-sim",
   "version": "0.1.0",
   "private": true,
