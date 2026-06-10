@@ -391,8 +391,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
       </div>
 
       {/* MAIN GRID */}
-      <div className="flex-1 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis">
-        {/* PANEL A: ASSETS (Spans 2 rows) */}
+<div className="flex-1 min-h-0 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis overflow-hidden">        {/* PANEL A: ASSETS (Spans 2 rows) */}
         <Card className="row-span-2 p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
           <PanelHeader title="Assets" />
           <div className="flex-1 overflow-auto">
