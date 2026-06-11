@@ -8,6 +8,8 @@ import sys
 from collections import defaultdict, deque
 from datetime import timezone
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()  # reads backend/.env into the environment
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,7 +20,7 @@ from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
 from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-
+from clients import seed_rfqs, evaluate_quote, CLIENTS
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
@@ -47,6 +49,7 @@ class SimSession:
         self.contracts: list[Contract] = build_menu(initial_tick.prices)
         self.contracts_by_id = {c.contract_id: c for c in self.contracts}
         self.portfolio = Portfolio()
+        self.rfqs = seed_rfqs()
         self.scheduler = NewsScheduler(
             news_path=NEWS_PATH,
             real_start=self.engine.real_start.replace(tzinfo=timezone.utc),
@@ -106,6 +109,31 @@ class SimSession:
             "ask": q["ask"],
             "mid": q["mid"],
         }
+    def handle_client_quote(self, msg: dict) -> dict:
+        rfq_id = msg.get("rfq_id")
+        your_price = float(msg.get("price", 0))
+        rfq = next((r for r in self.rfqs if r.rfq_id == rfq_id), None)
+        if not rfq or rfq.status != "open":
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": "RFQ no longer open"}
+
+        contract = self.contracts_by_id.get(rfq.contract_id)
+        spot = self.current_prices[contract.underlying]
+        mid = price_contract(contract, spot)
+        now = self.tick_idx  # tick_idx advances ~1/sec
+
+        accepted = evaluate_quote(rfq, your_price, mid, now)
+        if accepted:
+            # Client buys => you SELL (go short) at your price. Sign is -quantity.
+            dealer_qty = -rfq.quantity if rfq.side == "buy" else rfq.quantity
+            note = self.portfolio.trade(contract, dealer_qty, your_price)
+            rfq.status = "filled"
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
+                    "message": f"{rfq.client_name} lifted your quote. {note}"}
+        else:
+            rfq.status = "rejected"
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": f"{rfq.client_name} passed — your price wasn't competitive."}
 
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
@@ -126,8 +154,9 @@ async def ws_endpoint(websocket: WebSocket):
                 if msg.get("type") == "order":
                     ack = session.handle_order(msg)
                     await websocket.send_json(ack)
-                elif msg.get("type") == "quote_request":
-                    await websocket.send_json(session.handle_quote(msg))
+                elif msg.get("type") == "client_quote":
+                    await asyncio.sleep(1.2)  # "thinking" delay
+                    await websocket.send_json(session.handle_client_quote(msg))
         except WebSocketDisconnect:
             session.running = False
 
@@ -156,6 +185,7 @@ async def ws_endpoint(websocket: WebSocket):
                 "history":   session.history_for_frontend(),
                 "menu":      session.menu_for_frontend(),
                 "portfolio": snap,
+                "rfqs":      [r.to_dict(tick.sim_time) for r in session.rfqs],
             })
 
             for news in session.scheduler.pending(tick.sim_time):

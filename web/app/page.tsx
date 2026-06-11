@@ -138,6 +138,9 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   const [timeMap, setTimeMap] = useState<Record<number, string>>({});
   const [newsSearch, setNewsSearch] = useState("");
   const [assetSort, setAssetSort] = useState<{ col: string; dir: 1 | -1 }>({ col: "Ticker", dir: 1 });
+  const [rfqs, setRfqs] = useState<any[]>([]);
+  const [clientMsg, setClientMsg] = useState<string>("");
+  const [quotePrices, setQuotePrices] = useState<Record<string, string>>({});
   
   // Optimistic UI states
   const [closingPositions, setClosingPositions] = useState<Set<string>>(new Set());
@@ -181,7 +184,8 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         setPrices(msg.prices);
         setHistory(msg.history);
         setContracts(msg.menu);
-        setPortfolio(msg.portfolio);
+        setPortfolio(msg.portfolio); 
+        setRfqs(msg.rfqs || []);
         // Use HH:MM format for the chart timeline
         const timeStr = msg.real_time.slice(11, 16); // "HH:MM"
         setRealDate(msg.real_time.slice(0, 10));
@@ -193,6 +197,8 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         setQuote({ bid: msg.bid, ask: msg.ask });
       } else if (msg.type === "sim_complete") {
         setRunning(false);
+      } else if (msg.type === "client_result") {
+        setClientMsg(msg.message);
       }
     };
     ws.onclose = () => setRunning(false);
@@ -586,6 +592,51 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
             </Table>
           </div>
         </Card>
+       
+
+       {/* CLIENT DESK (slice 2 - temporary) */}
+        <Card className="p-3 rounded-none bg-tremor-background shadow-none overflow-auto">
+          <Text className="text-[10px] uppercase font-black tracking-widest mb-2">Client Desk</Text>
+          {clientMsg && <Text className="text-[11px] text-tremor-brand mb-2">{clientMsg}</Text>}
+          {rfqs.length === 0 ? (
+            <Text className="text-tremor-content-subtle text-[11px]">No client requests.</Text>
+          ) : (
+            rfqs.map(r => (
+              <div key={r.rfq_id} className="text-[11px] mb-3 border-b border-tremor-border/40 pb-2">
+                <div className="mb-1">
+                  <span className="font-bold">{r.client_name}</span> wants to {r.side}{" "}
+                  <span className="font-mono">{r.quantity}</span> × {r.contract_id}
+                  <span className="text-tremor-content-subtle"> ({r.status}{r.time_left != null ? `, ${Math.ceil(r.time_left)}s left` : ""})</span>
+                </div>
+                {r.status === "open" && (
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      placeholder="your price"
+                      value={quotePrices[r.rfq_id] || ""}
+                      onChange={e => setQuotePrices(prev => ({ ...prev, [r.rfq_id]: e.target.value }))}
+                      className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] w-24 outline-none focus:border-tremor-brand/50 font-mono"
+                    />
+                    <Button
+                      size="xs"
+                      variant="primary"
+                      onClick={() => {
+                        const price = parseFloat(quotePrices[r.rfq_id] || "0");
+                        if (price > 0 && wsRef.current?.readyState === 1) {
+                          wsRef.current.send(JSON.stringify({ type: "client_quote", rfq_id: r.rfq_id, price }));
+                        }
+                      }}
+                    >
+                      Quote
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </Card>
+
+        
 
         {/* PANEL E: EXCHANGE */}
         <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
