@@ -20,7 +20,7 @@ from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
 from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-from clients import seed_rfqs, evaluate_quote, CLIENTS
+from clients import seed_rfqs, evaluate_quote, CLIENTS, apply_message, post_message, all_threads
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
@@ -116,25 +116,41 @@ class SimSession:
         if not rfq or rfq.status != "open":
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
                     "message": "RFQ no longer open"}
+    
 
         contract = self.contracts_by_id.get(rfq.contract_id)
         spot = self.current_prices[contract.underlying]
         mid = price_contract(contract, spot)
-        now = self.tick_idx  # tick_idx advances ~1/sec
+        now = self.tick_idx
 
+        post_message(rfq.client_id, "you", f"Quote: {your_price:.4f}", now)
         accepted = evaluate_quote(rfq, your_price, mid, now)
         if accepted:
-            # Client buys => you SELL (go short) at your price. Sign is -quantity.
             dealer_qty = -rfq.quantity if rfq.side == "buy" else rfq.quantity
             note = self.portfolio.trade(contract, dealer_qty, your_price)
             rfq.status = "filled"
+            post_message(rfq.client_id, "client", "Done, thanks.", now)
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
                     "message": f"{rfq.client_name} lifted your quote. {note}"}
         else:
             rfq.status = "rejected"
+            post_message(rfq.client_id, "client", "Too wide, I'll pass.", now)
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
-                    "message": f"{rfq.client_name} passed — your price wasn't competitive."}
+                    "message": f"{rfq.client_name} passed — not competitive."}
 
+    def handle_client_message(self, msg: dict) -> dict:
+        rfq_id = msg.get("rfq_id")
+        text = str(msg.get("text", "")).strip()
+        rfq = next((r for r in self.rfqs if r.rfq_id == rfq_id), None)
+        if not rfq or not text:
+            return {"type": "client_msg_result", "rfq_id": rfq_id}
+        now = self.tick_idx
+        post_message(rfq.client_id, "you", text, now)
+        result = apply_message(rfq, text, now)
+        if result["reply"]:
+            post_message(rfq.client_id, "client", result["reply"], now)
+        return {"type": "client_msg_result", "rfq_id": rfq_id,
+                "intent": result["intent"], "effect": result["effect"]}
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -154,9 +170,14 @@ async def ws_endpoint(websocket: WebSocket):
                 if msg.get("type") == "order":
                     ack = session.handle_order(msg)
                     await websocket.send_json(ack)
+                elif msg.get("type") == "quote_request":
+                    await websocket.send_json(session.handle_quote(msg))
                 elif msg.get("type") == "client_quote":
                     await asyncio.sleep(1.2)  # "thinking" delay
                     await websocket.send_json(session.handle_client_quote(msg))
+                elif msg.get("type") == "client_message":
+                    await asyncio.sleep(0.8)  # brief "reading" pause
+                    await websocket.send_json(session.handle_client_message(msg))
         except WebSocketDisconnect:
             session.running = False
 
@@ -186,6 +207,7 @@ async def ws_endpoint(websocket: WebSocket):
                 "menu":      session.menu_for_frontend(),
                 "portfolio": snap,
                 "rfqs":      [r.to_dict(tick.sim_time) for r in session.rfqs],
+                "threads":   all_threads(),
             })
 
             for news in session.scheduler.pending(tick.sim_time):

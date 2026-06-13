@@ -141,6 +141,14 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   const [rfqs, setRfqs] = useState<any[]>([]);
   const [clientMsg, setClientMsg] = useState<string>("");
   const [quotePrices, setQuotePrices] = useState<Record<string, string>>({});
+  const selectedUnderlyingRef = useRef<string | null>(null);
+  const contractTypeRef = useRef<string>("bullish");
+  const exchangeTabRef = useRef<number>(0);
+  const tradeQtyRef = useRef<number | "">("");
+  useEffect(() => { selectedUnderlyingRef.current = selectedUnderlying; }, [selectedUnderlying]);
+  useEffect(() => { contractTypeRef.current = contractType; }, [contractType]);
+  useEffect(() => { exchangeTabRef.current = exchangeTab; }, [exchangeTab]);
+  useEffect(() => { tradeQtyRef.current = tradeQty; }, [tradeQty]);
   
   // Optimistic UI states
   const [closingPositions, setClosingPositions] = useState<Set<string>>(new Set());
@@ -191,9 +199,20 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         setRealDate(msg.real_time.slice(0, 10));
         setTimeMap(prev => ({ ...prev, [Math.floor(msg.sim_time)]: timeStr }));
         setClosingPositions(new Set());
+        // Request a fresh size-adjusted quote for the selected contract every tick
+        const suffix = exchangeTabRef.current === 1 ? "future" : contractTypeRef.current;
+        const selId = selectedUnderlyingRef.current ? `${selectedUnderlyingRef.current}_${suffix}` : null;
+        if (selId && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: "quote_request",
+            contract_id: selId,
+            quantity: Math.max(1, Number(tradeQtyRef.current) || 1),
+          }));
+        }
       } else if (msg.type === "news") {
         setNews((prev) => [msg, ...prev]);
       } else if (msg.type === "quote") {
+        console.log("QUOTE RECEIVED", msg);
         setQuote({ bid: msg.bid, ask: msg.ask });
       } else if (msg.type === "sim_complete") {
         setRunning(false);
@@ -292,16 +311,6 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   }, [contracts, selectedUnderlying, contractType, exchangeTab]);
 
   const [quote, setQuote] = useState<{ bid: number; ask: number }>({ bid: 0, ask: 0 });
-
-  // Request a size-adjusted quote whenever the contract or quantity changes
-  useEffect(() => {
-    if (!wsRef.current || wsRef.current.readyState !== 1 || !selectedContract) return;
-    wsRef.current.send(JSON.stringify({
-      type: "quote_request",
-      contract_id: selectedContract.id,
-      quantity: Math.max(1, Number(tradeQty) || 1),
-    }));
-  }, [selectedContract, tradeQty]);
 
   const bidAsk = quote;
 
