@@ -20,7 +20,7 @@ from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
 from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-from clients import seed_rfqs, evaluate_quote, CLIENTS, apply_message, post_message, all_threads
+from clients import seed_rfqs, evaluate_two_way, maybe_spawn_rfq, expire_rfqs, solicit_rfq, CLIENTS, apply_message, post_message, all_threads
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
@@ -49,7 +49,7 @@ class SimSession:
         self.contracts: list[Contract] = build_menu(initial_tick.prices)
         self.contracts_by_id = {c.contract_id: c for c in self.contracts}
         self.portfolio = Portfolio()
-        self.rfqs = seed_rfqs()
+        self.rfqs = seed_rfqs(list(self.contracts_by_id.keys()))
         self.scheduler = NewsScheduler(
             news_path=NEWS_PATH,
             real_start=self.engine.real_start.replace(tzinfo=timezone.utc),
@@ -59,6 +59,7 @@ class SimSession:
         # Rolling price history per underlying (list of {t, px})
         self.history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_LEN))
         self.tick_idx = 0
+        self.sim_time = 0.0
         self.running = False
 
     def menu_for_frontend(self) -> list[dict]:
@@ -111,32 +112,43 @@ class SimSession:
         }
     def handle_client_quote(self, msg: dict) -> dict:
         rfq_id = msg.get("rfq_id")
-        your_price = float(msg.get("price", 0))
+        your_bid = float(msg.get("bid", 0))
+        your_ask = float(msg.get("ask", 0))
         rfq = next((r for r in self.rfqs if r.rfq_id == rfq_id), None)
         if not rfq or rfq.status != "open":
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
                     "message": "RFQ no longer open"}
-    
 
         contract = self.contracts_by_id.get(rfq.contract_id)
         spot = self.current_prices[contract.underlying]
         mid = price_contract(contract, spot)
-        now = self.tick_idx
+        now = self.sim_time
 
-        post_message(rfq.client_id, "you", f"Quote: {your_price:.4f}", now)
-        accepted = evaluate_quote(rfq, your_price, mid, now)
-        if accepted:
-            dealer_qty = -rfq.quantity if rfq.side == "buy" else rfq.quantity
-            note = self.portfolio.trade(contract, dealer_qty, your_price)
-            rfq.status = "filled"
-            post_message(rfq.client_id, "client", "Done, thanks.", now)
-            return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
-                    "message": f"{rfq.client_name} lifted your quote. {note}"}
-        else:
-            rfq.status = "rejected"
-            post_message(rfq.client_id, "client", "Too wide, I'll pass.", now)
+        post_message(rfq.client_id, "you", f"{your_bid:.4f} / {your_ask:.4f}", now)
+        traded, dealer_qty, fill_price, action = evaluate_two_way(rfq, your_bid, your_ask, mid, now)
+
+        if action == "invalid":
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
-                    "message": f"{rfq.client_name} passed — not competitive."}
+                    "message": "Crossed or invalid market \u2014 your bid must be below your ask."}
+
+        if traded:
+            note = self.portfolio.trade(contract, dealer_qty, fill_price)
+            rfq.status = "filled"
+            edge = (your_ask - mid) if action == "lifted" else (mid - your_bid)
+            if action == "lifted":
+                post_message(rfq.client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
+                outcome = f"bought {rfq.quantity} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
+            else:
+                post_message(rfq.client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
+                outcome = f"sold {rfq.quantity} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
+                    "message": f"{rfq.client_name} {outcome}. {note}"}
+
+        rfq.status = "rejected"
+        post_message(rfq.client_id, "client",
+                     f"Fair's around {mid:.2f} \u2014 your {your_bid:.2f}/{your_ask:.2f} is too wide. I'll pass.", now)
+        return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                "message": f"{rfq.client_name} passed \u2014 fair was ~{mid:.4f}, your market sat outside their tolerance."}
 
     def handle_client_message(self, msg: dict) -> dict:
         rfq_id = msg.get("rfq_id")
@@ -144,13 +156,25 @@ class SimSession:
         rfq = next((r for r in self.rfqs if r.rfq_id == rfq_id), None)
         if not rfq or not text:
             return {"type": "client_msg_result", "rfq_id": rfq_id}
-        now = self.tick_idx
+        now = self.sim_time
         post_message(rfq.client_id, "you", text, now)
         result = apply_message(rfq, text, now)
         if result["reply"]:
             post_message(rfq.client_id, "client", result["reply"], now)
         return {"type": "client_msg_result", "rfq_id": rfq_id,
                 "intent": result["intent"], "effect": result["effect"]}
+
+    def handle_request_market(self, msg: dict) -> dict:
+        client_id = msg.get("client_id")
+        rfq = solicit_rfq(self.rfqs, client_id, self.sim_time, list(self.contracts_by_id.keys()))
+        if rfq is None:
+            name = CLIENTS[client_id].name if client_id in CLIENTS else str(client_id)
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"{name} has nothing to show right now."}
+        return {"type": "client_result", "rfq_id": rfq.rfq_id, "accepted": True,
+                "message": f"{rfq.client_name} sent a new market."}
+
+
 @app.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -161,6 +185,7 @@ async def ws_endpoint(websocket: WebSocket):
         "contracts": session.menu_for_frontend(),
         "sim_duration_sec": SIM_DURATION_SEC,
         "tick_hz": TICK_HZ,
+        "clients": [{"client_id": c.client_id, "name": c.name, "style": c.style} for c in CLIENTS.values()],
     })
 
     async def order_listener():
@@ -175,9 +200,12 @@ async def ws_endpoint(websocket: WebSocket):
                 elif msg.get("type") == "client_quote":
                     await asyncio.sleep(1.2)  # "thinking" delay
                     await websocket.send_json(session.handle_client_quote(msg))
+                elif msg.get("type") == "request_market":
+                    await websocket.send_json(session.handle_request_market(msg))
                 elif msg.get("type") == "client_message":
                     await asyncio.sleep(0.8)  # brief "reading" pause
-                    await websocket.send_json(session.handle_client_message(msg))
+                    result = await asyncio.to_thread(session.handle_client_message, msg)
+                    await websocket.send_json(result)
         except WebSocketDisconnect:
             session.running = False
 
@@ -190,6 +218,9 @@ async def ws_endpoint(websocket: WebSocket):
             tick = session.engine.step(i)
             session.current_prices = dict(tick.prices)
             session.tick_idx = i
+            session.sim_time = tick.sim_time
+            expire_rfqs(session.rfqs, tick.sim_time)
+            maybe_spawn_rfq(session.rfqs, tick.sim_time, list(session.contracts_by_id.keys()))
 
             # Append to history
             for ticker, px in tick.prices.items():

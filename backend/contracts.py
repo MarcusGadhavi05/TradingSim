@@ -136,7 +136,8 @@ LIQUIDITY_CLIP = {
     "IGLT.L": 20, "BZ=F": 15, "GC=F": 15,
 }  # default 10 for equities/options
 
-IMPACT_COEFF = 0.0015  # how hard size widens the spread
+IMPACT_COEFF = 0.0030  # overall size impact (per clip-multiple)
+IMPACT_EXP   = 0.68    # size sensitivity: 0.5=sqrt (gentle) .. 1.0=linear (steep)
 
 
 def liquidity_quote(contract: Contract, spot: float, qty: int) -> dict:
@@ -152,7 +153,7 @@ def liquidity_quote(contract: Contract, spot: float, qty: int) -> dict:
         vega_factor = 1.0 + min(2.0, (vega / mid) if mid > 0 else 0.0)
         base *= vega_factor
 
-    size_penalty = IMPACT_COEFF * sqrt(max(1, abs(qty)) / clip)
+    size_penalty = IMPACT_COEFF * (max(1, abs(qty)) / clip) ** IMPACT_EXP
     half = base + size_penalty
 
     return {

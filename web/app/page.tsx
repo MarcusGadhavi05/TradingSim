@@ -26,7 +26,7 @@ import {
   NumberInput,
   Divider,
 } from "@tremor/react";
-import Chart from "../components/Chart";
+import PriceChart from "../components/PriceChart";
 
 // --- Types & Constants ---
 
@@ -140,7 +140,12 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   const [assetSort, setAssetSort] = useState<{ col: string; dir: 1 | -1 }>({ col: "Ticker", dir: 1 });
   const [rfqs, setRfqs] = useState<any[]>([]);
   const [clientMsg, setClientMsg] = useState<string>("");
-  const [quotePrices, setQuotePrices] = useState<Record<string, string>>({});
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [clientRoster, setClientRoster] = useState<{ client_id: string; name: string; style: string }[]>([]);
+  const [lastRead, setLastRead] = useState<Record<string, number>>({});
+  const [quoteBids, setQuoteBids] = useState<Record<string, string>>({});
+  const [quoteAsks, setQuoteAsks] = useState<Record<string, string>>({});
+  const [threads, setThreads] = useState<Record<string, { sender: string; text: string; sim_time: number }[]>>({});
   const selectedUnderlyingRef = useRef<string | null>(null);
   const contractTypeRef = useRef<string>("bullish");
   const exchangeTabRef = useRef<number>(0);
@@ -184,6 +189,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
       const msg = JSON.parse(ev.data);
       if (msg.type === "init") {
         setSimDuration(msg.sim_duration_sec);
+        setClientRoster(msg.clients || []);
         setContracts(msg.contracts);
         const tickers = Array.from(new Set(msg.contracts.map((c: Contract) => c.underlying))) as string[];
         if (!selectedUnderlying) setSelectedUnderlying(tickers[0]);
@@ -194,6 +200,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         setContracts(msg.menu);
         setPortfolio(msg.portfolio); 
         setRfqs(msg.rfqs || []);
+        setThreads(msg.threads || {});
         // Use HH:MM format for the chart timeline
         const timeStr = msg.real_time.slice(11, 16); // "HH:MM"
         setRealDate(msg.real_time.slice(0, 10));
@@ -327,6 +334,56 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
 
   const accentHex = ASSET_HEX[ASSET_TYPE[selectedUnderlying || ""] || "Equity"];
 
+  // --- Client desk: persistent roster, unread-aware ---
+  const latestRfqByClient = useMemo(() => {
+    const m: Record<string, any> = {};
+    for (const r of rfqs) m[r.client_id] = r;
+    return m;
+  }, [rfqs]);
+  const deskRows = useMemo(() => clientRoster.map((c: any) => ({
+    client_id: c.client_id, client_name: c.name, rfq: latestRfqByClient[c.client_id] || null,
+  })), [clientRoster, latestRfqByClient]);
+  useEffect(() => {
+    if (selectedClientId == null && deskRows.length) {
+      const live = deskRows.find((r: any) => r.rfq?.status === "open");
+      setSelectedClientId((live ?? deskRows[0]).client_id);
+    }
+  }, [deskRows, selectedClientId]);
+  useEffect(() => {
+    if (!selectedClientId) return;
+    const len = (threads[selectedClientId] || []).length;
+    setLastRead(prev => prev[selectedClientId] === len ? prev : { ...prev, [selectedClientId]: len });
+  }, [selectedClientId, threads]);
+  const isUnread = (cid: string) => {
+    const t = threads[cid] || [];
+    return t.length > (lastRead[cid] || 0) && t[t.length - 1]?.sender === "client";
+  };
+  const selectedRow = deskRows.find((r: any) => r.client_id === selectedClientId) || null;
+  const statusLabel = (rfq: any) =>
+    !rfq ? "no request"
+    : rfq.status === "open" ? (rfq.time_left != null ? `${Math.ceil(rfq.time_left)}s` : "live")
+    : rfq.status === "filled" ? "done"
+    : rfq.status === "rejected" ? "passed"
+    : rfq.status === "expired" ? "not interested"
+    : rfq.status;
+  const sendClientMsg = (rfqId: string, text: string) => {
+    if (text && rfqId && wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "client_message", rfq_id: rfqId, text }));
+    }
+  };
+  const requestMarket = (clientId: string) => {
+    if (wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "request_market", client_id: clientId }));
+    }
+  };
+  const sendClientQuote = (rfqId: string) => {
+    const bid = parseFloat(quoteBids[rfqId] || "0");
+    const ask = parseFloat(quoteAsks[rfqId] || "0");
+    if (bid > 0 && ask > 0 && wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "client_quote", rfq_id: rfqId, bid, ask }));
+    }
+  };
+
   return (
 <main className="min-h-screen flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none">
       {/* WAKING OVERLAY */}
@@ -410,14 +467,14 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
             size="sm"
             className={running ? "bg-tremor-background-emphasis text-tremor-content-subtle border-none" : ""}
           >
-            {running ? "Runningâ€¦" : "Start Sim"}
+            {running ? "In Progress" : "Start Sim"}
           </Button>
         </div>
       </div>
 
       {/* MAIN GRID */}
 <div className="flex-1 min-h-0 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis overflow-hidden">        {/* PANEL A: ASSETS (Spans 2 rows) */}
-        <Card className="row-span-2 p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
+        <Card className="p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
           <PanelHeader title="Assets" />
           <div className="flex-1 overflow-auto">
             <Table>
@@ -450,13 +507,9 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                     </TableCell>
                     <TableCell className="px-3 py-2.5 font-mono text-tremor-content">{fmtPx(a.price)}</TableCell>
                     <TableCell className="px-3 py-2.5">
-                      <BadgeDelta 
-                        deltaType={a.chg >= 0 ? "increase" : "decrease"} 
-                        size="xs"
-                        className={a.chg >= 0 ? "text-emerald-500 font-bold" : "text-rose-500 font-bold"}
-                      >
-                        {a.chg.toFixed(2)}%
-                      </BadgeDelta>
+                      <span className="font-mono text-[11px] font-bold" style={{ color: a.chg >= 0 ? "#10b981" : "#f43f5e" }}>
+                        {a.chg >= 0 ? "\u2197" : "\u2198"} {Math.abs(a.chg).toFixed(2)}%
+                      </span>
                     </TableCell>
                     <TableCell className="px-3 py-2.5">
                       {(() => {
@@ -603,46 +656,110 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
        
 
-       {/* CLIENT DESK (slice 2 - temporary) */}
-        <Card className="p-3 rounded-none bg-tremor-background shadow-none overflow-auto">
-          <Text className="text-[10px] uppercase font-black tracking-widest mb-2">Client Desk</Text>
-          {clientMsg && <Text className="text-[11px] text-tremor-brand mb-2">{clientMsg}</Text>}
-          {rfqs.length === 0 ? (
-            <Text className="text-tremor-content-subtle text-[11px]">No client requests.</Text>
-          ) : (
-            rfqs.map(r => (
-              <div key={r.rfq_id} className="text-[11px] mb-3 border-b border-tremor-border/40 pb-2">
-                <div className="mb-1">
-                  <span className="font-bold">{r.client_name}</span> wants to {r.side}{" "}
-                  <span className="font-mono">{r.quantity}</span> × {r.contract_id}
-                  <span className="text-tremor-content-subtle"> ({r.status}{r.time_left != null ? `, ${Math.ceil(r.time_left)}s left` : ""})</span>
-                </div>
-                {r.status === "open" && (
-                  <div className="flex gap-2 items-center">
-                    <input
-                      type="number"
-                      placeholder="your price"
-                      value={quotePrices[r.rfq_id] || ""}
-                      onChange={e => setQuotePrices(prev => ({ ...prev, [r.rfq_id]: e.target.value }))}
-                      className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] w-24 outline-none focus:border-tremor-brand/50 font-mono"
-                    />
-                    <Button
-                      size="xs"
-                      variant="primary"
-                      onClick={() => {
-                        const price = parseFloat(quotePrices[r.rfq_id] || "0");
-                        if (price > 0 && wsRef.current?.readyState === 1) {
-                          wsRef.current.send(JSON.stringify({ type: "client_quote", rfq_id: r.rfq_id, price }));
-                        }
-                      }}
-                    >
-                      Quote
-                    </Button>
-                  </div>
-                )}
-              </div>
-            ))
+        {/* CLIENT DESK (market making) */}
+        <Card className="p-0 rounded-none bg-tremor-background shadow-none flex flex-col overflow-hidden">
+          <PanelHeader title="Client Desk" headerExtra={
+            <span className="text-[9px] uppercase font-bold text-tremor-content-subtle">{deskRows.filter((r:any)=>r.rfq?.status==="open").length} live</span>
+          } />
+          {clientMsg && (
+            <div className="px-3 py-1.5 text-[10px] text-tremor-brand border-b border-tremor-border bg-tremor-brand/5">{clientMsg}</div>
           )}
+          <div className="flex-1 flex min-h-0">
+            <div className="w-[40%] border-r border-tremor-border overflow-auto shrink-0">
+              {deskRows.length === 0 ? (
+                <div className="p-3 text-[11px] text-tremor-content-subtle italic">Connecting...</div>
+              ) : (
+                deskRows.map((row: any) => {
+                  const unread = isUnread(row.client_id);
+                  const isSel = row.client_id === selectedClientId;
+                  const live = row.rfq?.status === "open";
+                  const sub = row.rfq ? `${row.rfq.quantity} ${shortTicker(String(row.rfq.contract_id).split("_")[0])}` : "idle";
+                  return (
+                    <button key={row.client_id} onClick={() => setSelectedClientId(row.client_id)}
+                      className={`w-full text-left px-3 py-2 border-b border-tremor-border/40 transition-colors ${isSel ? "bg-tremor-brand/10" : unread ? "bg-emerald-500/20" : "hover:bg-tremor-content-strong/[0.04]"}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-[11px] truncate flex items-center gap-1">
+                          {unread && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>}
+                          {row.client_name}
+                        </span>
+                        <span className={`font-mono text-[9px] ${live ? "text-emerald-500" : "text-tremor-content-subtle/60"}`}>{statusLabel(row.rfq)}</span>
+                      </div>
+                      <div className="text-[9px] text-tremor-content-subtle/80 mt-0.5 font-mono">{sub}</div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+            <div className="flex-1 flex flex-col min-h-0">
+              {!selectedRow ? (
+                <div className="p-3 text-[11px] text-tremor-content-subtle italic">Select a client.</div>
+              ) : (() => {
+                const row = selectedRow;
+                const rfq = row.rfq;
+                const t = threads[row.client_id] || [];
+                const live = rfq?.status === "open";
+                const tkr = rfq ? shortTicker(String(rfq.contract_id).split("_")[0]) : "";
+                const kind = rfq ? (String(rfq.contract_id).split("_")[1] || "") : "";
+                const ref = rfq ? contracts.find(c => c.id === rfq.contract_id) : undefined;
+                const refMid = ref?.premium ?? 0;
+                return (
+                  <>
+                    <div className="px-3 py-2 border-b border-tremor-border shrink-0">
+                      <div className="text-[11px] font-bold">{row.client_name}</div>
+                      <div className="text-[10px] text-tremor-content mt-0.5">
+                        {rfq ? <>{live ? "wants a market in" : "last asked for"} <span className="font-mono">{rfq.quantity}</span> {tkr} <span className="uppercase">{kind}</span> {"\u00B7"} ref mid {fmtPx(refMid)} {"\u00B7"} {statusLabel(rfq)}</> : "no active request"}
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-auto p-2 flex flex-col gap-1 bg-tremor-background-muted/30">
+                      {t.length === 0 ? (
+                        <div className="text-[10px] text-tremor-content-subtle italic">No messages yet.</div>
+                      ) : t.map((m: any, i: number) => (
+                        <div key={i} className={`text-[10px] ${m.sender === "you" ? "text-right text-tremor-brand" : "text-left text-tremor-content"}`}>
+                          <span className="opacity-50 mr-1">{m.sender === "you" ? "You:" : `${row.client_name}:`}</span>{m.text}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="p-2 border-t border-tremor-border shrink-0 flex flex-col gap-2">
+                      {live && (
+                        <div className="flex gap-1 flex-wrap">
+                          <Button size="xs" variant="secondary" onClick={() => sendClientMsg(rfq.rfq_id, "Coming now")} className="text-[9px]">Coming now</Button>
+                          <Button size="xs" variant="secondary" onClick={() => sendClientMsg(rfq.rfq_id, "Working it")} className="text-[9px]">Working it</Button>
+                          <Button size="xs" variant="secondary" onClick={() => sendClientMsg(rfq.rfq_id, "Can't help")} className="text-[9px]">Can't help</Button>
+                        </div>
+                      )}
+                      {rfq && (
+                        <input type="text" placeholder={live ? "message client..." : "say something..."}
+                          onKeyDown={e => { if (e.key === "Enter") { sendClientMsg(rfq.rfq_id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; } }}
+                          className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] outline-none focus:border-tremor-brand/50" />
+                      )}
+                      {live ? (
+                        <div className="flex gap-2 items-end">
+                          <div className="flex flex-col flex-1">
+                            <span className="text-[8px] uppercase font-bold text-rose-500">Your Bid</span>
+                            <input type="number" placeholder="bid" value={quoteBids[rfq.rfq_id] || ""}
+                              onChange={e => setQuoteBids(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-rose-500/50" />
+                          </div>
+                          <div className="flex flex-col flex-1">
+                            <span className="text-[8px] uppercase font-bold text-emerald-500">Your Ask</span>
+                            <input type="number" placeholder="ask" value={quoteAsks[rfq.rfq_id] || ""}
+                              onChange={e => setQuoteAsks(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-emerald-500/50" />
+                          </div>
+                          <Button size="xs" variant="primary" onClick={() => sendClientQuote(rfq.rfq_id)} className="h-7">Quote</Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-tremor-content-subtle italic">No live request.</span>
+                          <Button size="xs" variant="secondary" onClick={() => requestMarket(row.client_id)} className="text-[9px]">Ask for a market</Button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
         </Card>
 
         
@@ -810,7 +927,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
             {realDate}
           </Badge>
           <div className="flex-1 relative overflow-hidden bg-tremor-background-muted/30">
-            <Chart 
+            <PriceChart 
               hist={selectedHist} 
               mode={chartMode} 
               timeMap={timeMap} 
