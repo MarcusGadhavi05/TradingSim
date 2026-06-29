@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
@@ -163,6 +163,17 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   // Timeframe and chart toggle
   const [timeframe, setTimeframe] = useState<number | "all">(15);
   const [chartMode, setChartMode] = useState<"line" | "area">("line");
+  const [selectedAssetTab, setSelectedAssetTab] = useState<string>("All");
+  const [scale, setScale] = useState<number | null>(null);
+
+  // Viewport scale
+  useEffect(() => {
+    const update = () =>
+      setScale(Math.min(window.innerWidth / 1920, window.innerHeight / 1080));
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
 
   // Warm-up on load
   useEffect(() => {
@@ -303,6 +314,27 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
     });
   }, [tickers, prices, history, assetSort]);
 
+  const assetCategories = useMemo(() => {
+    const types = Array.from(new Set(tickers.map(t => ASSET_TYPE[t] || "Equity"))).sort();
+    return ["All", ...types];
+  }, [tickers]);
+
+  const filteredAssets = useMemo(() => {
+    if (selectedAssetTab === "All") return sortedAssets;
+    return sortedAssets.filter(a => a.type === selectedAssetTab);
+  }, [sortedAssets, selectedAssetTab]);
+
+  const getTabLabel = useCallback((cat: string) => {
+    const labels: Record<string, string> = {
+      All: "All",
+      Equity: "Equities",
+      Commodity: "Commodities",
+      FX: "FX",
+      Rates: "Rates",
+    };
+    return labels[cat] || cat;
+  }, []);
+
   const filteredNews = useMemo(() => {
     const search = (newsSearch || "").trim().toLowerCase();
     if (!search) return news;
@@ -385,7 +417,8 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
   };
 
   return (
-<main className="min-h-screen flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none">
+    <div className="fixed inset-0 bg-tremor-background-muted overflow-hidden flex items-center justify-center">
+    <main className="w-[1920px] h-[1080px] flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans text-[12px] select-none overflow-hidden" style={{ transformOrigin: 'center center', transform: `scale(${scale ?? 1})`, flexShrink: 0, visibility: scale === null ? 'hidden' : 'visible' }}>
       {/* WAKING OVERLAY */}
       {/* ... (omitted overlay code for context) ... */}
 
@@ -454,7 +487,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
           />
           <Stat label="Net Exposure" value={fmtMoney(netExposure)} />
         </Flex>
-        
+
         <div className="flex items-center gap-4 ml-4">
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${running ? "bg-tremor-brand shadow-[0_0_8px_var(--color-tremor-brand-DEFAULT)] animate-pulse-dot" : "bg-tremor-content-strong/10"}`}></div>
@@ -473,10 +506,27 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
       </div>
 
       {/* MAIN GRID */}
-<div className="flex-1 min-h-0 grid grid-cols-[22%_38%_40%] grid-rows-[50%_50%] gap-px bg-tremor-background-emphasis overflow-hidden">        {/* PANEL A: ASSETS (Spans 2 rows) */}
-        <Card className="p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none">
-          <PanelHeader title="Assets" />
-          <div className="flex-1 overflow-auto">
+      <div className="flex-1 min-h-0 grid grid-cols-[26%_34%_40%] grid-rows-[9fr_11fr] gap-px bg-tremor-background-emphasis overflow-hidden">
+        {/* PANEL A: ASSETS */}
+        <Card className="p-0 flex flex-col border-r border-tremor-border rounded-none bg-tremor-background shadow-none overflow-hidden min-h-0">
+          <PanelHeader
+            title="Assets"
+            headerExtra={
+              <TabGroup
+                index={assetCategories.indexOf(selectedAssetTab)}
+                onIndexChange={(i) => setSelectedAssetTab(assetCategories[i])}
+              >
+                <TabList variant="line" className="p-0.5">
+                  {assetCategories.map(cat => (
+                    <Tab key={cat} className="px-1.5 py-0.5 text-[8px] font-bold uppercase">
+                      {getTabLabel(cat)}
+                    </Tab>
+                  ))}
+                </TabList>
+              </TabGroup>
+            }
+          />
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <Table>
               <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
                 <TableRow className="border-b border-tremor-border">
@@ -484,7 +534,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                     <TableHeaderCell 
                       key={col} 
                       onClick={() => setAssetSort({ col, dir: assetSort.col === col ? (assetSort.dir === 1 ? -1 : 1) : 1 })}
-                      className="px-3 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle cursor-pointer hover:text-tremor-content transition-colors"
+                      className="px-2 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle cursor-pointer hover:text-tremor-content transition-colors"
                     >
                       <Flex justifyContent="start" className="gap-1">
                         {col}
@@ -495,28 +545,28 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                 </TableRow>
               </TableHead>
               <TableBody>
-                {sortedAssets.map(a => (
+                {filteredAssets.map(a => (
                   <TableRow 
                     key={a.ticker} 
                     onClick={() => setSelectedUnderlying(a.ticker)}
                     className={`group border-b border-tremor-border/50 cursor-pointer hover:bg-tremor-brand/[0.05] transition-colors ${selectedUnderlying === a.ticker ? "bg-tremor-brand/[0.05]" : ""}`}
                   >
-                    <TableCell className="px-3 py-2.5 font-bold relative text-[11px]">
+                    <TableCell className="px-2 py-1 font-bold relative text-[10px]">
                       {selectedUnderlying === a.ticker && <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-tremor-brand"></div>}
                       {shortTicker(a.ticker)}
                     </TableCell>
-                    <TableCell className="px-3 py-2.5 font-mono text-tremor-content">{fmtPx(a.price)}</TableCell>
-                    <TableCell className="px-3 py-2.5">
-                      <span className="font-mono text-[11px] font-bold" style={{ color: a.chg >= 0 ? "#10b981" : "#f43f5e" }}>
+                    <TableCell className="px-2 py-1 font-mono text-[10px] text-tremor-content">{fmtPx(a.price)}</TableCell>
+                    <TableCell className="px-2 py-1 text-[10px]">
+                      <span className="font-mono text-[10px] font-bold" style={{ color: a.chg >= 0 ? "#10b981" : "#f43f5e" }}>
                         {a.chg >= 0 ? "\u2197" : "\u2198"} {Math.abs(a.chg).toFixed(2)}%
                       </span>
                     </TableCell>
-                    <TableCell className="px-3 py-2.5">
+                    <TableCell className="px-2 py-1 text-[10px]">
                       {(() => {
                         const hex = ASSET_HEX[a.type] || "#ffffff";
                         return (
                           <span 
-                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[9px] font-bold uppercase border"
+                            className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[8px] font-bold uppercase border"
                             style={{ color: hex, borderColor: hex, backgroundColor: hex + "1F" }}
                           >
                             {a.type}
@@ -532,7 +582,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
 
         {/* PANEL B: NEWS */}
-        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none overflow-hidden min-h-0">
           <PanelHeader 
             title="Market Intelligence" 
             headerExtra={
@@ -547,32 +597,32 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
               </div>
             }
           />
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {filteredNews.length === 0 ? (
               <div className="p-8 text-center text-tremor-content-subtle italic">No news matching filters.</div>
             ) : (
               <Table>
                 <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
                   <TableRow className="border-b border-tremor-border">
-                    <TableHeaderCell className="px-4 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle w-20">Ticker</TableHeaderCell>
-                    <TableHeaderCell className="px-4 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle">Headline</TableHeaderCell>
+                    <TableHeaderCell className="px-2 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle w-16">Ticker</TableHeaderCell>
+                    <TableHeaderCell className="px-2 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle">Headline</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {filteredNews.map((n, i) => (
                     <TableRow key={i} className="group border-b border-tremor-border/50 animate-fade-in hover:bg-tremor-content-strong/[0.02]">
-                      <TableCell className="px-4 py-3 align-top">
+                      <TableCell className="px-2 py-1.5 align-top">
                         <Badge color={
                           n.category === "macro" ? "amber" :
                           n.category === "uk" ? "blue" :
                           n.category === "us" ? "red" : "violet"
-                        } size="xs">
+                        } size="xs" className="px-1.5 py-0">
                           {CATEGORY_MAP[n.category] || n.category.toUpperCase()}
                         </Badge>
                       </TableCell>
-                      <TableCell className="px-4 py-3 align-top group/head relative">
-                        <Title className="font-medium text-[13px] leading-snug">{n.headline}</Title>
-                        <Text className="text-[10px] text-tremor-content-subtle mt-1 font-mono">{n.real_time.slice(0, 16).replace("T", " ")}</Text>
+                      <TableCell className="px-2 py-1.5 align-top group/head relative">
+                        <Title className="font-medium text-[11px] leading-snug">{n.headline}</Title>
+                        <Text className="text-[9px] text-tremor-content-subtle mt-0.5 font-mono">{n.real_time.slice(0, 16).replace("T", " ")}</Text>
                         <div className="invisible group-hover/head:visible absolute top-full left-0 z-50 bg-tremor-background-emphasis text-tremor-content-emphasis text-[11px] p-2 rounded shadow-xl border border-tremor-brand/20 max-w-xs mt-1">
                           {n.impact_hint}
                         </div>
@@ -586,7 +636,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
 
         {/* PANEL C: POSITIONS */}
-        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none overflow-hidden min-h-0">
           <PanelHeader 
             title="Live Portfolio" 
             headerExtra={
@@ -600,22 +650,22 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
               </Button>
             }
           />
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 min-h-0 overflow-y-auto">
             <Table>
               <TableHead className="sticky top-0 bg-tremor-background-subtle z-10">
                 <TableRow className="border-b border-tremor-border">
-                  <TableHeaderCell className="px-3 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle">Security</TableHeaderCell>
-                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Net Pos</TableHeaderCell>
-                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Avg Price</TableHeaderCell>
-                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Pos Value</TableHeaderCell>
-                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">U P&L</TableHeaderCell>
-                  <TableHeaderCell className="px-2 py-2 text-[10px] uppercase font-bold text-tremor-content-subtle text-right">Close</TableHeaderCell>
+                  <TableHeaderCell className="px-2 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle">Security</TableHeaderCell>
+                  <TableHeaderCell className="px-1.5 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle text-right">Net Pos</TableHeaderCell>
+                  <TableHeaderCell className="px-1.5 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle text-right">Avg Price</TableHeaderCell>
+                  <TableHeaderCell className="px-1.5 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle text-right">Pos Value</TableHeaderCell>
+                  <TableHeaderCell className="px-1.5 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle text-right">U P&L</TableHeaderCell>
+                  <TableHeaderCell className="px-1.5 py-1 text-[9px] uppercase font-bold text-tremor-content-subtle text-right">Close</TableHeaderCell>
                 </TableRow>
               </TableHead>
               <TableBody className="font-mono">
                 {!portfolio || portfolio.positions.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-12 text-center text-tremor-content-subtle text-[14px]">
+                    <TableCell colSpan={6} className="py-8 text-center text-tremor-content-subtle text-[12px]">
                       {Array(6).fill("- : -").join("     ")}
                     </TableCell>
                   </TableRow>
@@ -628,22 +678,22 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                     const isPositive = p.pnl >= 0;
                     return (
                       <TableRow key={p.contract_id} className={`border-b border-tremor-border/50 hover:bg-tremor-content-strong/[0.04] transition-colors ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
-                        <TableCell className="px-3 py-2.5 font-sans font-bold">{p.label.split(" (")[0]}</TableCell>
-                        <TableCell className="px-2 py-2.5 text-right font-bold">
-                          <Text className={`font-bold ${p.quantity >= 0 ? "text-emerald-500" : "text-rose-500"}`}>{p.quantity}</Text>
+                        <TableCell className="px-2 py-1 font-sans font-bold text-[10px]">{p.label.split(" (")[0]}</TableCell>
+                        <TableCell className="px-1.5 py-1 text-right font-bold">
+                          <Text className={`font-bold text-[10px] ${p.quantity >= 0 ? "text-emerald-500" : "text-rose-500"}`}>{p.quantity}</Text>
                         </TableCell>
-                        <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtPx(p.entry)}</TableCell>
-                        <TableCell className="px-2 py-2.5 text-right text-tremor-content">{fmtMoney(posValue)}</TableCell>
-                        <TableCell className="px-2 py-2.5 text-right">
-                          <Text className={`font-bold ${isPositive ? "text-emerald-500" : "text-rose-500"}`}>{fmtMoney(p.pnl)}</Text>
+                        <TableCell className="px-1.5 py-1 text-right text-[10px] text-tremor-content">{fmtPx(p.entry)}</TableCell>
+                        <TableCell className="px-1.5 py-1 text-right text-[10px] text-tremor-content">{fmtMoney(posValue)}</TableCell>
+                        <TableCell className="px-1.5 py-1 text-right">
+                          <Text className={`font-bold text-[10px] ${isPositive ? "text-emerald-500" : "text-rose-500"}`}>{fmtMoney(p.pnl)}</Text>
                         </TableCell>
-                        <TableCell className="px-2 py-2.5 text-right">
+                        <TableCell className="px-1.5 py-1 text-right">
                           <Button 
                             variant="light" 
                             size="xs" 
                             icon={XIcon}
                             onClick={() => closePosition(p.contract_id, p.quantity)}
-                            className="hover:bg-rose-500 hover:text-tremor-background-muted transition-colors"
+                            className="hover:bg-rose-500 hover:text-tremor-background-muted transition-colors scale-90"
                           />
                         </TableCell>
                       </TableRow>
@@ -656,16 +706,16 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
        
 
-        {/* CLIENT DESK (market making) */}
-        <Card className="p-0 rounded-none bg-tremor-background shadow-none flex flex-col overflow-hidden">
+        {/* PANEL D: CLIENT DESK */}
+        <Card className="p-0 rounded-none bg-tremor-background shadow-none flex flex-col overflow-hidden min-h-0">
           <PanelHeader title="Client Desk" headerExtra={
             <span className="text-[9px] uppercase font-bold text-tremor-content-subtle">{deskRows.filter((r:any)=>r.rfq?.status==="open").length} live</span>
           } />
           {clientMsg && (
             <div className="px-3 py-1.5 text-[10px] text-tremor-brand border-b border-tremor-border bg-tremor-brand/5">{clientMsg}</div>
           )}
-          <div className="flex-1 flex min-h-0">
-            <div className="w-[40%] border-r border-tremor-border overflow-auto shrink-0">
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            <div className="w-[40%] border-r border-tremor-border overflow-y-auto shrink-0 min-h-0">
               {deskRows.length === 0 ? (
                 <div className="p-3 text-[11px] text-tremor-content-subtle italic">Connecting...</div>
               ) : (
@@ -676,7 +726,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                   const sub = row.rfq ? `${row.rfq.quantity} ${shortTicker(String(row.rfq.contract_id).split("_")[0])}` : "idle";
                   return (
                     <button key={row.client_id} onClick={() => setSelectedClientId(row.client_id)}
-                      className={`w-full text-left px-3 py-2 border-b border-tremor-border/40 transition-colors ${isSel ? "bg-tremor-brand/10" : unread ? "bg-emerald-500/20" : "hover:bg-tremor-content-strong/[0.04]"}`}>
+                      className={`w-full text-left px-2 py-1 border-b border-tremor-border/40 transition-colors ${isSel ? "bg-tremor-brand/10" : unread ? "bg-emerald-500/20" : "hover:bg-tremor-content-strong/[0.04]"}`}>
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-[11px] truncate flex items-center gap-1">
                           {unread && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>}
@@ -690,7 +740,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                 })
               )}
             </div>
-            <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               {!selectedRow ? (
                 <div className="p-3 text-[11px] text-tremor-content-subtle italic">Select a client.</div>
               ) : (() => {
@@ -710,7 +760,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                         {rfq ? <>{live ? "wants a market in" : "last asked for"} <span className="font-mono">{rfq.quantity}</span> {tkr} <span className="uppercase">{kind}</span> {"\u00B7"} ref mid {fmtPx(refMid)} {"\u00B7"} {statusLabel(rfq)}</> : "no active request"}
                       </div>
                     </div>
-                    <div className="flex-1 overflow-auto p-2 flex flex-col gap-1 bg-tremor-background-muted/30">
+                    <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1 bg-tremor-background-muted/30 min-h-0">
                       {t.length === 0 ? (
                         <div className="text-[10px] text-tremor-content-subtle italic">No messages yet.</div>
                       ) : t.map((m: any, i: number) => (
@@ -734,19 +784,19 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                       )}
                       {live ? (
                         <div className="flex gap-2 items-end">
-                          <div className="flex flex-col flex-1">
+                          <div className="flex flex-col flex-1 min-w-0">
                             <span className="text-[8px] uppercase font-bold text-rose-500">Your Bid</span>
                             <input type="number" placeholder="bid" value={quoteBids[rfq.rfq_id] || ""}
                               onChange={e => setQuoteBids(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
                               className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-rose-500/50" />
                           </div>
-                          <div className="flex flex-col flex-1">
+                          <div className="flex flex-col flex-1 min-w-0">
                             <span className="text-[8px] uppercase font-bold text-emerald-500">Your Ask</span>
                             <input type="number" placeholder="ask" value={quoteAsks[rfq.rfq_id] || ""}
                               onChange={e => setQuoteAsks(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
                               className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-emerald-500/50" />
                           </div>
-                          <Button size="xs" variant="primary" onClick={() => sendClientQuote(rfq.rfq_id)} className="h-7">Quote</Button>
+                          <Button size="xs" variant="primary" onClick={() => sendClientQuote(rfq.rfq_id)} className="h-7 shrink-0">Quote</Button>
                         </div>
                       ) : (
                         <div className="flex items-center justify-between gap-2">
@@ -765,13 +815,13 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         
 
         {/* PANEL E: EXCHANGE */}
-        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none">
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background shadow-none overflow-hidden min-h-0">
           <PanelHeader title="Execution Engine" />
-          <div className="flex-1 p-4 flex flex-col">
-            <Flex alignItems="center" justifyContent="between" className="mb-4">
+          <div className="flex-1 p-3 flex flex-col min-h-0">
+            <Flex alignItems="center" justifyContent="between" className="mb-3 animate-fade-in shrink-0">
               <Flex justifyContent="start" className="gap-2 w-auto items-center">
                 <span className="w-2 h-2 rounded-full" style={{ backgroundColor: accentHex }}></span>
-                <Title className="text-[20px] font-bold tracking-tight text-tremor-content-emphasis">{selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}</Title>
+                <Title className="text-[16px] font-bold tracking-tight text-tremor-content-emphasis">{selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}</Title>
                 <span className="text-[9px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded" style={{ color: accentHex, backgroundColor: accentHex + "1F" }}>
                   {ASSET_TYPE[selectedUnderlying || ""] || "Equity"}
                 </span>
@@ -784,13 +834,13 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
               </TabGroup>
             </Flex>
 
-            <Flex className="gap-2 mb-4">
+            <Flex className="gap-2 mb-3 shrink-0">
               <div className="relative flex-1">
                 <input
                   type="number"
                   value={tradeQty}
                   onChange={e => setTradeQty(e.target.value === "" ? "" : Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full bg-tremor-background-muted border border-tremor-border rounded h-10 px-3 font-mono text-[16px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/30"
+                  className="w-full bg-tremor-background-muted border border-tremor-border rounded h-8 px-2 font-mono text-[14px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/30"
                 />
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
@@ -803,7 +853,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                     size="xs"
                     variant={tradeQty === v ? "primary" : "secondary"}
                     onClick={() => setTradeQty(v)}
-                    className="h-10 px-3 text-[10px]"
+                    className="h-8 px-2 text-[10px]"
                   >
                     {v}
                   </Button>
@@ -811,7 +861,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
               </Flex>
             </Flex>
 
-            <div className="flex-1 min-h-0 overflow-y-auto mb-4">
+            <div className="flex-1 min-h-0 overflow-y-auto mb-3">
               {exchangeTab === 0 ? (
                 <Grid numItems={2} className="gap-2">
                   {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
@@ -822,19 +872,19 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                       <div
                         key={type}
                         onClick={() => setContractType(type)}
-                        className={`p-3 cursor-pointer rounded-md border transition-all flex flex-col ${isSel ? "" : "border-tremor-border hover:bg-tremor-content-strong/[0.04]"}`}
+                        className={`p-2 cursor-pointer rounded-md border transition-all flex flex-col ${isSel ? "" : "border-tremor-border hover:bg-tremor-content-strong/[0.04]"}`}
                         style={isSel ? { borderColor: accentHex, backgroundColor: accentHex + "14" } : undefined}
                       >
-                        <span className="text-[12px] font-bold tracking-wide text-tremor-content-emphasis">{name.heading}</span>
-                        <span className="text-[9px] text-tremor-content-subtle mb-3">{name.sub}</span>
+                        <span className="text-[11px] font-bold tracking-wide text-tremor-content-emphasis">{name.heading}</span>
+                        <span className="text-[9px] text-tremor-content-subtle mb-2">{name.sub}</span>
                         <div className="flex items-end justify-between mt-auto">
                           <div className="flex flex-col">
                             <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">Strike</span>
-                            <span className="text-[11px] font-mono text-tremor-content">{fmtPx(c?.strike || 0)}</span>
+                            <span className="text-[10px] font-mono text-tremor-content">{fmtPx(c?.strike || 0)}</span>
                           </div>
                           <div className="flex flex-col items-end">
                             <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">Premium</span>
-                            <span className="text-[18px] font-bold font-mono leading-none text-tremor-content-emphasis">{fmtPx(c?.premium || 0)}</span>
+                            <span className="text-[15px] font-bold font-mono leading-none text-tremor-content-emphasis">{fmtPx(c?.premium || 0)}</span>
                           </div>
                         </div>
                       </div>
@@ -848,13 +898,13 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                   const size = CONTRACT_SIZE[selectedUnderlying || ""] || 1;
                   const notional = px * size;
                   return (
-                    <div className="rounded-md border p-4 flex flex-col" style={{ borderColor: accentHex, backgroundColor: accentHex + "0D" }}>
-                      <div className="flex items-center justify-between mb-3">
-                        <span className="text-[12px] uppercase font-black tracking-widest" style={{ color: accentHex }}>1M Future</span>
+                    <div className="rounded-md border p-3 flex flex-col" style={{ borderColor: accentHex, backgroundColor: accentHex + "0D" }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] uppercase font-black tracking-widest" style={{ color: accentHex }}>1M Future</span>
                         <span className="text-[10px] font-bold text-tremor-content">{selectedUnderlying}</span>
                       </div>
-                      <div className="flex flex-col items-end mb-4">
-                        <span className="text-[32px] font-bold font-mono leading-none tracking-tight text-tremor-content-emphasis">{fmtPx(px)}</span>
+                      <div className="flex flex-col items-end mb-3">
+                        <span className="text-[24px] font-bold font-mono leading-none tracking-tight text-tremor-content-emphasis">{fmtPx(px)}</span>
                         <span className="text-[8px] uppercase tracking-widest text-tremor-content-subtle mt-1">Live Futures Price</span>
                       </div>
                       <div className="grid grid-cols-2 gap-px bg-tremor-border rounded overflow-hidden">
@@ -864,9 +914,9 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                           ["Notional / Contract", fmtMoney(notional)],
                           ["Asset Class", ASSET_TYPE[selectedUnderlying || ""] || "Equity"],
                         ] as const).map(([k, v]) => (
-                          <div key={k} className="bg-tremor-background p-2 flex flex-col gap-0.5">
+                          <div key={k} className="bg-tremor-background p-1.5 flex flex-col gap-0.5">
                             <span className="text-[8px] uppercase font-bold tracking-wider text-tremor-content-subtle">{k}</span>
-                            <span className="text-[11px] font-mono text-tremor-content">{v}</span>
+                            <span className="text-[10px] font-mono text-tremor-content">{v}</span>
                           </div>
                         ))}
                       </div>
@@ -876,24 +926,24 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
               )}
             </div>
 
-            <Grid numItems={2} className="gap-3 mb-4">
+            <Grid numItems={2} className="gap-3 mb-3 shrink-0">
               <div
                 onClick={() => placeOrder(-1)}
-                className={`flex flex-col items-center justify-center p-3 cursor-pointer rounded-md border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
+                className={`flex flex-col items-center justify-center p-2 cursor-pointer rounded-md border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
               >
                 <span className="text-[10px] uppercase font-bold text-rose-500 mb-1">Sell (Bid)</span>
-                <span className="font-mono text-[20px] font-bold text-rose-500">{fmtPx(bidAsk.bid)}</span>
+                <span className="font-mono text-[16px] font-bold text-rose-500">{fmtPx(bidAsk.bid)}</span>
               </div>
               <div
                 onClick={() => placeOrder(1)}
-                className={`flex flex-col items-center justify-center p-3 cursor-pointer rounded-md border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
+                className={`flex flex-col items-center justify-center p-2 cursor-pointer rounded-md border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
               >
                 <span className="text-[10px] uppercase font-bold text-emerald-500 mb-1">Buy (Ask)</span>
-                <span className="font-mono text-[20px] font-bold text-emerald-500">{fmtPx(bidAsk.ask)}</span>
+                <span className="font-mono text-[16px] font-bold text-emerald-500">{fmtPx(bidAsk.ask)}</span>
               </div>
             </Grid>
 
-            <div className="mt-auto border-t border-tremor-border pt-3 flex justify-between items-baseline">
+            <div className="mt-auto shrink-0 border-t border-tremor-border pt-2 flex justify-between items-baseline">
               <span className="text-tremor-content-subtle uppercase text-[9px] font-bold tracking-wider">Notional Value</span>
               <span className="font-mono text-[14px] text-tremor-content-emphasis">
 {"\u00A3"}{fmt((Number(tradeQty) || 0) * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}             </span>
@@ -902,7 +952,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
 
         {/* PANEL F: CHART */}
-        <Card className="p-0 flex flex-col rounded-none bg-tremor-background relative shadow-none">
+        <Card className="p-0 flex flex-col rounded-none bg-tremor-background relative shadow-none overflow-hidden min-h-0">
           <PanelHeader 
             title="Market Action" 
             headerExtra={
@@ -926,7 +976,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
           <Badge className="absolute top-10 right-3 z-10" color="tremor-brand">
             {realDate}
           </Badge>
-          <div className="flex-1 relative overflow-hidden bg-tremor-background-muted/30">
+          <div className="flex-1 relative overflow-hidden bg-tremor-background-muted/30 min-h-[80px]">
             <PriceChart 
               hist={selectedHist} 
               mode={chartMode} 
@@ -938,6 +988,7 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         </Card>
       </div>
     </main>
+    </div>
   );
 }
 
@@ -948,7 +999,7 @@ function Stat({ label, value, delta }: { label: string; value: string; delta?: n
   const pnlColor = delta !== undefined ? (delta >= 0 ? "text-emerald-500" : "text-rose-500") : "";
 
   return (
-    <Flex className="gap-2 group w-auto" justifyContent="start">
+    <Flex className="gap-2 group w-auto shrink-0" justifyContent="start">
       <div className="w-px h-3 bg-tremor-border"></div>
       <Flex flexDirection="col" alignItems="start" className="w-auto">
         <Text className="text-[9px] uppercase font-bold text-tremor-content-subtle leading-none mb-0.5 tracking-wider">{label}</Text>
