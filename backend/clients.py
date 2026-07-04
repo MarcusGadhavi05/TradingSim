@@ -8,7 +8,9 @@ import random
 import json
 import itertools
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from anthropic import Anthropic
+from dotenv import load_dotenv
 
 
 # ---------- Clients ----------
@@ -150,6 +152,8 @@ _client = None
 def _get_anthropic():
     global _client
     if _client is None:
+        # Load backend/.env explicitly so the key is found regardless of cwd
+        load_dotenv(Path(__file__).parent / ".env")
         key = os.environ.get("ANTHROPIC_API_KEY")
         if key:
             _client = Anthropic(api_key=key)
