@@ -10,9 +10,12 @@ export default function PriceChart({
 }: {
   hist: Pt[]; ticker: string; color: string; mode?: "line" | "area"; timeMap?: Record<number, string>;
 }) {
+  // x must be UNIQUE per point: ApexCharts' category axis silently drops the series
+  // when x values repeat, and a slow tape produces many ticks within the same HH:MM.
+  // Use sim-seconds as the category and map to HH:MM only in the label formatter.
   const series = useMemo(
-    () => [{ name: ticker, data: hist.map((d) => ({ x: timeMap[Math.floor(d.t)] || String(Math.floor(d.t)), y: d.px })) }],
-    [hist, ticker, timeMap]
+    () => [{ name: ticker, data: hist.map((d) => ({ x: String(Math.floor(d.t)), y: d.px })) }],
+    [hist, ticker]
   );
 
   const pxs = hist.map((d) => d.px);
@@ -45,7 +48,11 @@ export default function PriceChart({
     markers: { size: 0, hover: { size: 4 } },
     xaxis: {
       type: "category", tickAmount: 6, tickPlacement: "on",
-      labels: { style: { colors: "rgba(255,255,255,0.35)", fontSize: "9px", fontFamily: "monospace" }, rotate: 0, hideOverlappingLabels: true, showDuplicates: false },
+      labels: {
+        style: { colors: "rgba(255,255,255,0.35)", fontSize: "9px", fontFamily: "monospace" },
+        rotate: 0, hideOverlappingLabels: true, showDuplicates: false,
+        formatter: (val: string) => timeMap[Number(val)] ?? String(val),
+      },
       axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, crosshairs: { show: true, stroke: { color: "rgba(255,255,255,0.15)", dashArray: 3 } },
     },
     yaxis: {
