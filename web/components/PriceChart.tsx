@@ -16,10 +16,17 @@ export default function PriceChart({
   );
 
   const pxs = hist.map((d) => d.px);
-  const lo = Math.min(...pxs), hi = Math.max(...pxs);
-  const pad = (hi - lo) * 0.12 || hi * 0.001 || 1;
+  const rawLo = Math.min(...pxs), rawHi = Math.max(...pxs);
+  const mid = (rawLo + rawHi) / 2;
+  // Floor the visible span at 0.1% of price: a calm tape otherwise produces a
+  // near-zero range at large magnitude, which degenerates the axis to a blank chart.
+  const span = Math.max(rawHi - rawLo, Math.abs(mid) * 0.001, 1e-9);
+  const lo = mid - span / 2, hi = mid + span / 2;
+  const pad = span * 0.12;
   const a = Math.abs(pxs[pxs.length - 1] ?? 0);
-  const dp = a < 1 ? 4 : a < 10 ? 3 : a < 1000 ? 2 : 1;
+  const magDp = a < 1 ? 4 : a < 10 ? 3 : a < 1000 ? 2 : 1;
+  // Enough decimals that axis labels/tooltip stay distinct when zoomed into a tight span
+  const dp = Math.max(magDp, Math.min(6, Math.max(0, Math.ceil(-Math.log10(span / 5)))));
 
   const options: any = {
     chart: {
@@ -42,7 +49,7 @@ export default function PriceChart({
       axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, crosshairs: { show: true, stroke: { color: "rgba(255,255,255,0.15)", dashArray: 3 } },
     },
     yaxis: {
-      min: lo - pad, max: hi + pad, tickAmount: 5, forceNiceScale: true,
+      min: lo - pad, max: hi + pad, tickAmount: 5,
       labels: { style: { colors: "rgba(255,255,255,0.35)", fontSize: "9px", fontFamily: "monospace" }, formatter: (v: number) => v.toFixed(dp) },
     },
     tooltip: { theme: "dark", x: { show: true }, y: { formatter: (v: number) => v.toFixed(dp) }, marker: { show: false } },

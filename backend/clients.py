@@ -7,7 +7,8 @@ import os
 import random
 import json
 import itertools
-from dataclasses import dataclass, asdict
+import traceback
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from anthropic import Anthropic
 from dotenv import load_dotenv
@@ -22,11 +23,23 @@ class Client:
     style: str
     base_tolerance: float
     urgency_ramp: float
+    interest_map: dict = field(default_factory=dict)
 
 CLIENTS = {
-    "vortex":      Client("vortex",      "Vortex Capital",        "Aggressive macro fund",       0.018, 2.5),
+    "vortex":      Client("vortex",      "Vortex Capital",        "Aggressive macro fund",       0.018, 2.5, interest_map={
+        "SPY_future":      {"desired_side": "buy",  "edge_threshold": 0.010, "max_qty": None},
+        "GBPUSD=X_future": {"desired_side": "sell", "edge_threshold": 0.008, "max_qty": None},
+        "JPY=X_future":    {"desired_side": "buy",  "edge_threshold": 0.008, "max_qty": 300},
+        "BZ=F_future":     {"desired_side": "buy",  "edge_threshold": 0.012, "max_qty": 200},
+        "GC=F_bullish":    {"desired_side": "buy",  "edge_threshold": 0.015, "max_qty": 150},
+        "NVDA_lottery":    {"desired_side": "buy",  "edge_threshold": 0.020, "max_qty": 150},
+    }),
     "helix":       Client("helix",       "Helix Trading",         "Quant prop / HFT",            0.012, 3.0),
-    "monarch":     Client("monarch",     "Monarch Pension",       "Size-sensitive real-money",   0.035, 1.2),
+    "monarch":     Client("monarch",     "Monarch Pension",       "Size-sensitive real-money",   0.035, 1.2, interest_map={
+        "IGLT.L_future": {"desired_side": "buy",  "edge_threshold": 0.030, "max_qty": 50},
+        "SPY_hedge":     {"desired_side": "buy",  "edge_threshold": 0.035, "max_qty": 40},
+        "AZN.L_future":  {"desired_side": "sell", "edge_threshold": 0.030, "max_qty": 25},
+    }),
     "brightwater": Client("brightwater", "Brightwater Treasury",  "Corporate hedger",            0.045, 0.9),
     "stonehaven":  Client("stonehaven",  "Stonehaven Asset Mgmt", "Long-only asset manager",     0.030, 1.3),
     "calloway":    Client("calloway",    "Calloway Family Office","Demanding family office",     0.040, 1.8),
@@ -72,6 +85,8 @@ class RFQ:
     extended: bool = False
     last_answered_sec: float = 0.0
     status: str = "open"
+    counter_px: float = 0.0      # level the client countered at (0 = none)
+    counter_rounds: int = 0      # counters used; client walks after MAX_COUNTER_ROUNDS
 
     def annoyance(self, now: float) -> float:
         """0..1 — climbs with unanswered time. Medium: ~full by halfway through a silent span."""
@@ -371,26 +386,72 @@ def generate_client_turn(
             reply = client_reply(intent, annoyance) or ""
         return {"intent": intent, "reply": reply.strip()}
     except Exception:
+        traceback.print_exc()
         intent = detect_intent(player_message)
         return {"intent": intent, "reply": client_reply(intent, annoyance)}
+# ---------- Negotiation bands (multiples of each client's own threshold) ----------
+
+CLOSE_FACTOR       = 1.25   # up to 1.25x T: full size, grudging
+BORDERLINE_FACTOR  = 1.60   # up to 1.60x T: reduced size
+PARTIAL_FRACTION   = 0.5    # reduced size = half, floor, min 1
+MAX_COUNTER_ROUNDS = 2      # client counters at most twice, then walks
+
+
+def _tiered_decision(side: str, your_bid: float, your_ask: float,
+                     mid: float, threshold: float, qty: int):
+    """side is the CLIENT's action. Returns (traded, dealer_qty, price, action).
+    price is the fill price on fills, the client's counter level on "counter".
+    Compared in price space (px vs mid*(1±k*T)) so exact boundaries fill."""
+    if side == "buy":
+        px, sign, verb = your_ask, -1, "lifted"
+        within = lambda k: px <= mid * (1 + k * threshold)
+        counter_px = mid * (1 + CLOSE_FACTOR * threshold)
+    else:
+        px, sign, verb = your_bid, +1, "hit"
+        within = lambda k: px >= mid * (1 - k * threshold)
+        counter_px = mid * (1 - CLOSE_FACTOR * threshold)
+    if within(1.0):
+        return (True, sign * qty, px, verb)
+    if within(CLOSE_FACTOR):
+        return (True, sign * qty, px, verb + "_close")
+    if within(BORDERLINE_FACTOR):
+        fill_qty = max(1, int(qty * PARTIAL_FRACTION))
+        return (True, sign * fill_qty, px, verb + "_partial")
+    return (False, 0, counter_px, "counter")
+
+
 def evaluate_two_way(rfq: RFQ, your_bid: float, your_ask: float, mid: float, now: float):
     """
     Market-making: client wants a two-way market; their true side is hidden in rfq.side.
-    Returns (traded, dealer_qty, fill_price, action):
+    Returns (traded, dealer_qty, price, action):
       client buys  -> lifts your ask -> you sell (dealer short, -qty) at your ask
       client sells -> hits your bid  -> you buy  (dealer long,  +qty) at your bid
+    action in {"invalid", "lifted", "hit", "lifted_close", "hit_close",
+    "lifted_partial", "hit_partial", "counter"}; on "counter" price is the level
+    the client wants. Caller owns counter-round state.
     """
     if your_bid <= 0 or your_ask <= 0 or your_bid >= your_ask:
         return (False, 0, 0.0, "invalid")
     tol = rfq.effective_tolerance(now)
-    if rfq.side == "buy":
-        if your_ask <= mid * (1 + tol):
-            return (True, -rfq.quantity, your_ask, "lifted")
+    return _tiered_decision(rfq.side, your_bid, your_ask, mid, tol, rfq.quantity)
+
+def evaluate_unsolicited(client: Client, contract_id: str, your_bid: float,
+                         your_ask: float, mid: float, qty: int):
+    """
+    Unsolicited two-way shown to a client with standing interests.
+    Same sign convention and action vocabulary as evaluate_two_way, plus
+    "not_interested" (no interest entry) and "passed" (qty above max_qty).
+    """
+    if your_bid <= 0 or your_ask <= 0 or your_bid >= your_ask:
+        return (False, 0, 0.0, "invalid")
+    interest = client.interest_map.get(contract_id)
+    if interest is None:
+        return (False, 0, 0.0, "not_interested")
+    max_qty = interest.get("max_qty")
+    if max_qty is not None and qty > max_qty:
         return (False, 0, 0.0, "passed")
-    else:
-        if your_bid >= mid * (1 - tol):
-            return (True, rfq.quantity, your_bid, "hit")
-        return (False, 0, 0.0, "passed")
+    return _tiered_decision(interest["desired_side"], your_bid, your_ask, mid,
+                            interest["edge_threshold"], qty)
 
 def solicit_rfq(rfqs: list[RFQ], client_id: str, now: float, contract_ids: list[str]) -> RFQ | None:
     """Player asks a quiet client for a market. New RFQ only if they have none open."""

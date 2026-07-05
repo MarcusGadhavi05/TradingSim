@@ -197,8 +197,11 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
     setRunning(true);
     setNews([]);
     setTimeMap({});
+    let simDone = false;   // set on sim_complete — a finished sim must not auto-reconnect
+    const connect = () => {
     const ws = new WebSocket(BACKEND_WS);
     wsRef.current = ws;
+    ws.onopen = () => setRunning(true);
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "init") {
@@ -237,12 +240,20 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
         console.log("QUOTE RECEIVED", msg);
         setQuote({ bid: msg.bid, ask: msg.ask });
       } else if (msg.type === "sim_complete") {
+        simDone = true;
         setRunning(false);
       } else if (msg.type === "client_result") {
         setClientMsg(msg.message);
       }
     };
-    ws.onclose = () => setRunning(false);
+    ws.onclose = () => {
+      setRunning(false);
+      // Auto-reconnect on unexpected drops (e.g. backend restart), retrying until
+      // the socket reopens. Stop if the sim finished or a newer socket took over.
+      if (!simDone && wsRef.current === ws) setTimeout(connect, 1500);
+    };
+    };
+    connect();
   }, [selectedUnderlying]);
 
   const placeOrder = useCallback(
@@ -420,7 +431,26 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
     const bid = parseFloat(quoteBids[rfqId] || "0");
     const ask = parseFloat(quoteAsks[rfqId] || "0");
     if (bid > 0 && ask > 0 && wsRef.current?.readyState === 1) {
-      wsRef.current.send(JSON.stringify({ type: "client_quote", rfq_id: rfqId, bid, ask }));
+      const rfq = rfqs.find((r: any) => r.rfq_id === rfqId);
+      const realTkr = rfq ? shortTicker(String(rfq.contract_id).split("_")[0]) : "";
+      const quoted_ticker = quoteTickers[rfqId] ?? realTkr;
+      const quoted_qty = parseInt(quoteQtys[rfqId] || String(rfq?.quantity ?? 1), 10);
+      wsRef.current.send(JSON.stringify({
+        type: "client_quote", rfq_id: rfqId, bid, ask, quoted_ticker, quoted_qty,
+      }));
+    }
+  };
+  const sendUnsolicitedQuote = (clientId: string) => {
+    const key = `unsol_${clientId}`;
+    const ticker = (quoteTickers[key] ?? "").trim();
+    const qty = parseInt(quoteQtys[key] || "", 10);
+    const bid = parseFloat(quoteBids[key] || "0");
+    const ask = parseFloat(quoteAsks[key] || "0");
+    if (!ticker || !Number.isFinite(qty) || qty <= 0 || !(bid > 0) || !(ask > 0)) return;
+    if (wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({
+        type: "unsolicited_quote", client_id: clientId, ticker, qty, bid, ask,
+      }));
     }
   };
 
@@ -760,6 +790,9 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                 const kind = rfq ? (String(rfq.contract_id).split("_")[1] || "") : "";
                 const ref = rfq ? contracts.find(c => c.id === rfq.contract_id) : undefined;
                 const refMid = ref?.premium ?? 0;
+                const qKey = live ? rfq.rfq_id : `unsol_${row.client_id}`;
+                const defTkr = live ? tkr : "";
+                const defQty = live ? String(rfq.quantity) : "";
                 return (
                   <>
                     <div className="px-3 py-2 border-b border-tremor-border shrink-0">
@@ -790,45 +823,44 @@ const [simDuration, setSimDuration] = useState(3600);  const [simTime, setSimTim
                           onKeyDown={e => { if (e.key === "Enter") { sendClientMsg(rfq.rfq_id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; } }}
                           className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] outline-none focus:border-tremor-brand/50" />
                       )}
-                      {live ? (
-                        <div className="flex flex-col gap-1">
-                          <div className="flex gap-2 items-end">
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-[8px] uppercase font-bold text-tremor-content-subtle">Ticker</span>
-                              <input
-                                type="text"
-                                value={quoteTickers[rfq.rfq_id] ?? tkr}
-                                onChange={e => setQuoteTickers(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0"
-                              />
-                            </div>
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-[8px] uppercase font-bold text-tremor-content-subtle">Qty</span>
-                              <input
-                                type="text"
-                                value={quoteQtys[rfq.rfq_id] ?? String(rfq.quantity)}
-                                onChange={e => setQuoteQtys(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0"
-                              />
-                            </div>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex gap-2 items-end">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[8px] uppercase font-bold text-tremor-content-subtle">Ticker</span>
+                            <input
+                              type="text"
+                              value={quoteTickers[qKey] ?? defTkr}
+                              onChange={e => setQuoteTickers(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0"
+                            />
                           </div>
-                          <div className="flex gap-2 items-end">
-                            <div className="flex flex-col flex-1 min-w-0">
-                              <span className="text-[8px] uppercase font-bold text-rose-500">Your Bid</span>
-                              <input type="number" placeholder="bid" value={quoteBids[rfq.rfq_id] || ""}
-                                onChange={e => setQuoteBids(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-rose-500/50" />
-                            </div>
-                            <div className="flex flex-col flex-1 min-w-0">
-                              <span className="text-[8px] uppercase font-bold text-emerald-500">Your Ask</span>
-                              <input type="number" placeholder="ask" value={quoteAsks[rfq.rfq_id] || ""}
-                                onChange={e => setQuoteAsks(prev => ({ ...prev, [rfq.rfq_id]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-emerald-500/50" />
-                            </div>
-                            <Button size="xs" variant="primary" onClick={() => sendClientQuote(rfq.rfq_id)} className="h-7 shrink-0">Quote</Button>
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[8px] uppercase font-bold text-tremor-content-subtle">Qty</span>
+                            <input
+                              type="text"
+                              value={quoteQtys[qKey] ?? defQty}
+                              onChange={e => setQuoteQtys(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0"
+                            />
                           </div>
                         </div>
-                      ) : (
+                        <div className="flex gap-2 items-end">
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="text-[8px] uppercase font-bold text-rose-500">Your Bid</span>
+                            <input type="number" placeholder="bid" value={quoteBids[qKey] || ""}
+                              onChange={e => setQuoteBids(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-rose-500/50" />
+                          </div>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="text-[8px] uppercase font-bold text-emerald-500">Your Ask</span>
+                            <input type="number" placeholder="ask" value={quoteAsks[qKey] || ""}
+                              onChange={e => setQuoteAsks(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded h-7 px-2 text-[11px] font-mono outline-none focus:border-emerald-500/50" />
+                          </div>
+                          <Button size="xs" variant="primary" onClick={() => live ? sendClientQuote(rfq.rfq_id) : sendUnsolicitedQuote(row.client_id)} className="h-7 shrink-0">Quote</Button>
+                        </div>
+                      </div>
+                      {!live && (
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[9px] text-tremor-content-subtle italic">No live request.</span>
                           <Button size="xs" variant="secondary" onClick={() => requestMarket(row.client_id)} className="text-[9px]">Ask for a market</Button>

@@ -44,11 +44,13 @@ class ReplayEngine:
         data_dir: str | Path,
         sim_duration_sec: float = 20 * 60,
         tick_hz: float = 4.0,
-        noise_bps: float = 5.0,        # 5bp of intratick noise — tiny
+        noise_bps: float = 0.1,        # 0.1bp of intratick noise — barely-visible tape shimmer
+        data_time_scale: float = 1.0,  # <1 slows how fast historical time passes per sim second
         seed: int | None = 42,
     ):
         self.data_dir = Path(data_dir)
         self.sim_duration_sec = sim_duration_sec
+        self.data_time_scale = data_time_scale
         self.tick_hz = tick_hz
         self.tick_interval = 1.0 / tick_hz
         self.total_ticks = int(sim_duration_sec * tick_hz)
@@ -78,7 +80,10 @@ class ReplayEngine:
         self.real_start = first.index[0].to_pydatetime()
         self.real_end   = first.index[-1].to_pydatetime()
         self.real_span_sec = (self.real_end - self.real_start).total_seconds()
-        self.compression = self.real_span_sec / self.sim_duration_sec
+        # Historical seconds that pass per sim second. data_time_scale < 1 means the
+        # sim covers only that fraction of the window, at a proportionally calmer pace.
+        # Everything downstream (step(), NewsScheduler) keys off this one number.
+        self.compression = self.real_span_sec / self.sim_duration_sec * self.data_time_scale
 
     def subscribe(self, fn: Callable[[Tick], None]) -> None:
         self.listeners.append(fn)

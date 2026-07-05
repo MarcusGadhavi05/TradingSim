@@ -4,6 +4,7 @@ news headlines, and portfolio snapshots over websocket.
 """
 
 import asyncio
+import itertools
 import sys
 from collections import defaultdict, deque
 from datetime import timezone
@@ -20,14 +21,24 @@ from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
 from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-from clients import seed_rfqs, evaluate_two_way, maybe_spawn_rfq, expire_rfqs, solicit_rfq, CLIENTS, apply_message, post_message, all_threads
+from clients import seed_rfqs, evaluate_two_way, evaluate_unsolicited, maybe_spawn_rfq, expire_rfqs, solicit_rfq, CLIENTS, RFQ, MAX_COUNTER_ROUNDS, apply_message, post_message, all_threads
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
 
 SIM_DURATION_SEC = 60 * 60
 TICK_HZ          = 1
+DATA_TIME_SCALE  = 0.025  # slow the tape: ~1/40 of the historical window per sim hour
 HISTORY_LEN      = 240   # 60s of history at 4Hz, plenty for a chart
+
+# Unsolicited fills get their own id space so they can never collide with rfq_N
+_unsol_seq = itertools.count(1)
+
+
+def _short_ticker(t: str) -> str:
+    for sfx in ("=X", "=F", ".L", ".AS", ".DE"):
+        t = t.replace(sfx, "")
+    return t
 
 app = FastAPI()
 app.add_middleware(
@@ -44,6 +55,7 @@ class SimSession:
             data_dir=DATA_DIR,
             sim_duration_sec=SIM_DURATION_SEC,
             tick_hz=TICK_HZ,
+            data_time_scale=DATA_TIME_SCALE,
         )
         initial_tick = self.engine.step(0)
         self.contracts: list[Contract] = build_menu(initial_tick.prices)
@@ -56,6 +68,9 @@ class SimSession:
             compression=self.engine.compression,
         )
         self.current_prices = dict(initial_tick.prices)
+        # Pending unsolicited counters: (client_id, contract_id) -> {px, rounds, created_sec}.
+        # Popped on FULL fill or walk; a partial fill does NOT reset rounds.
+        self.unsol_counters: dict = {}
         # Rolling price history per underlying (list of {t, px})
         self.history: dict[str, deque] = defaultdict(lambda: deque(maxlen=HISTORY_LEN))
         self.tick_idx = 0
@@ -124,6 +139,33 @@ class SimSession:
         mid = price_contract(contract, spot)
         now = self.sim_time
 
+        # Derive the short-form ticker the frontend displays/sends
+        real_ticker = rfq.contract_id.rsplit("_", 1)[0]  # "GBPUSD=X_bullish" → "GBPUSD=X"
+        def _short(t: str) -> str:
+            for sfx in ("=X", "=F", ".L", ".AS", ".DE"):
+                t = t.replace(sfx, "")
+            return t
+        real_short = _short(real_ticker)
+
+        quoted_ticker = str(msg.get("quoted_ticker", real_short)).strip()
+        _qty_raw = msg.get("quoted_qty", rfq.quantity)
+        quoted_qty = rfq.quantity if _qty_raw is None else int(_qty_raw)
+
+        ticker_ok = quoted_ticker.upper() == real_short.upper()
+        qty_ok    = quoted_qty == rfq.quantity
+        if not ticker_ok or not qty_ok:
+            post_message(rfq.client_id, "client",
+                         f"I asked for {rfq.quantity} {real_short}, not "
+                         f"{quoted_qty} {quoted_ticker}. Quote what I asked.", now)
+            parts = []
+            if not ticker_ok:
+                parts.append(f"ticker ({quoted_ticker} ≠ {real_short})")
+            if not qty_ok:
+                parts.append(f"quantity ({quoted_qty} ≠ {rfq.quantity})")
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": f"Wrong {' and '.join(parts)} — {rfq.client_name} wants "
+                               f"{rfq.quantity} {real_short}. RFQ still open."}
+
         post_message(rfq.client_id, "you", f"{your_bid:.4f} / {your_ask:.4f}", now)
         traded, dealer_qty, fill_price, action = evaluate_two_way(rfq, your_bid, your_ask, mid, now)
 
@@ -134,21 +176,176 @@ class SimSession:
         if traded:
             note = self.portfolio.trade(contract, dealer_qty, fill_price)
             rfq.status = "filled"
-            edge = (your_ask - mid) if action == "lifted" else (mid - your_bid)
-            if action == "lifted":
-                post_message(rfq.client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
-                outcome = f"bought {rfq.quantity} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
+            n = abs(dealer_qty)
+            lifted = action.startswith("lifted")
+            edge = (your_ask - mid) if lifted else (mid - your_bid)
+            if lifted:
+                if action == "lifted_close":
+                    post_message(rfq.client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {fill_price:.2f}. Done.", now)
+                elif action == "lifted_partial":
+                    post_message(rfq.client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {rfq.quantity} at {fill_price:.2f}. Done for those.", now)
+                else:
+                    post_message(rfq.client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
+                outcome = f"bought {n} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
             else:
-                post_message(rfq.client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
-                outcome = f"sold {rfq.quantity} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
+                if action == "hit_close":
+                    post_message(rfq.client_id, "client", f"Bit low, but I'll take it \u2014 yours at {fill_price:.2f}. Done.", now)
+                elif action == "hit_partial":
+                    post_message(rfq.client_id, "client", f"Only good for {n} at {fill_price:.2f}. Partial, done.", now)
+                else:
+                    post_message(rfq.client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
+                outcome = f"sold {n} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
+            if action.endswith("_partial"):
+                outcome += f" (partial \u2014 they asked for {rfq.quantity})"
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
                     "message": f"{rfq.client_name} {outcome}. {note}"}
 
-        rfq.status = "rejected"
-        post_message(rfq.client_id, "client",
-                     f"Fair's around {mid:.2f} \u2014 your {your_bid:.2f}/{your_ask:.2f} is too wide. I'll pass.", now)
+        # action == "counter": fill_price carries the client's counter level
+        counter_px = fill_price
+        if rfq.counter_rounds >= MAX_COUNTER_ROUNDS:
+            rfq.status = "rejected"
+            post_message(rfq.client_id, "client", "We're too far apart \u2014 I'm done here.", now)
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": f"{rfq.client_name} walked away after {rfq.counter_rounds} counters \u2014 fair was ~{mid:.4f}."}
+        rfq.counter_rounds += 1
+        rfq.counter_px = counter_px
+        if rfq.side == "buy":
+            post_message(rfq.client_id, "client",
+                         f"Can't pay {your_ask:.2f}. Show me {counter_px:.2f} and I'll do the full {rfq.quantity}.", now)
+        else:
+            post_message(rfq.client_id, "client",
+                         f"{your_bid:.2f} doesn't work. I need {counter_px:.2f} for the {rfq.quantity}.", now)
         return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
-                "message": f"{rfq.client_name} passed \u2014 fair was ~{mid:.4f}, your market sat outside their tolerance."}
+                "message": f"{rfq.client_name} countered at {counter_px:.4f} \u2014 improve your market and re-quote."}
+
+    def _resolve_unsolicited_contract(self, ticker: str, client) -> Contract | None:
+        """Map the quote bar's bare ticker to a contract. Full contract_id passes
+        through; otherwise match the underlying and prefer the instrument the
+        client has a standing interest in, falling back to the 1M future."""
+        t = ticker.strip()
+        if t in self.contracts_by_id:
+            return self.contracts_by_id[t]
+        underlying = next((u for u in self.current_prices
+                           if u.upper() == t.upper()
+                           or _short_ticker(u).upper() == t.upper()), None)
+        if underlying is None:
+            return None
+        for cid in client.interest_map:
+            c = self.contracts_by_id.get(cid)
+            if c and c.underlying == underlying:
+                return c
+        return self.contracts_by_id.get(f"{underlying}_future")
+
+    def handle_unsolicited_quote(self, msg: dict) -> dict:
+        client_id = msg.get("client_id")
+        client = CLIENTS.get(client_id)
+        if client is None:
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": "Unknown client."}
+        ticker = str(msg.get("ticker", "")).strip()
+        contract = self._resolve_unsolicited_contract(ticker, client)
+        if contract is None:
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"No instrument matches '{ticker}'."}
+        try:
+            qty = int(msg.get("qty", 0))
+            your_bid = float(msg.get("bid", 0))
+            your_ask = float(msg.get("ask", 0))
+        except (TypeError, ValueError):
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": "Invalid quote values."}
+        if qty <= 0:
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": "Quantity must be positive."}
+
+        spot = self.current_prices[contract.underlying]
+        mid = price_contract(contract, spot)
+        now = self.sim_time
+
+        post_message(client_id, "you", f"{your_bid:.4f} / {your_ask:.4f}", now)
+        traded, dealer_qty, fill_price, action = evaluate_unsolicited(
+            client, contract.contract_id, your_bid, your_ask, mid, qty)
+
+        if action == "invalid":
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": "Crossed or invalid market \u2014 your bid must be below your ask."}
+
+        if action == "not_interested":
+            post_message(client_id, "client", "Nothing there for me right now.", now)
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"{client.name} isn't interested in {contract.contract_id} right now."}
+
+        if action == "passed":
+            post_message(client_id, "client",
+                         f"Fair's around {mid:.2f} \u2014 your {your_bid:.2f}/{your_ask:.2f} is too wide, I'll pass.", now)
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"{client.name} passed \u2014 fair was ~{mid:.4f}, your market sat outside their interest."}
+
+        key = (client_id, contract.contract_id)
+
+        if action == "counter":
+            counter_px = fill_price   # third slot carries the counter level
+            entry = self.unsol_counters.get(key)
+            if entry and now - entry["created_sec"] > 120:
+                entry = None          # stale \u2014 rounds reset
+            rounds = entry["rounds"] if entry else 0
+            if rounds >= MAX_COUNTER_ROUNDS:
+                self.unsol_counters.pop(key, None)
+                post_message(client_id, "client", "We're too far apart \u2014 I'm done here.", now)
+                return {"type": "client_result", "rfq_id": None, "accepted": False,
+                        "message": f"{client.name} walked away after {rounds} counters \u2014 fair was ~{mid:.4f}."}
+            self.unsol_counters[key] = {"px": counter_px, "rounds": rounds + 1, "created_sec": now}
+            if client.interest_map[contract.contract_id]["desired_side"] == "buy":
+                post_message(client_id, "client",
+                             f"Can't pay {your_ask:.2f}. Show me {counter_px:.2f} and I'll do the full {qty}.", now)
+            else:
+                post_message(client_id, "client",
+                             f"{your_bid:.2f} doesn't work. I need {counter_px:.2f} for the {qty}.", now)
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"{client.name} countered at {counter_px:.4f} \u2014 improve your market and re-quote."}
+
+        # traded: book dealer_qty exactly as evaluate_unsolicited returned it
+        note = self.portfolio.trade(contract, dealer_qty, fill_price)
+        if not action.endswith("_partial"):
+            # Full fill ends the negotiation; a partial keeps rounds so the cap can't be reset
+            self.unsol_counters.pop(key, None)
+        n = abs(dealer_qty)
+        lifted = action.startswith("lifted")
+        rfq = RFQ(
+            rfq_id=f"unsol_{next(_unsol_seq)}",
+            client_id=client.client_id,
+            client_name=client.name,
+            contract_id=contract.contract_id,
+            side="buy" if lifted else "sell",   # the client's action
+            quantity=n,                          # what actually traded
+            created_sec=now,
+            deadline_sec=now,
+            base_tolerance=client.base_tolerance,
+            urgency_ramp=client.urgency_ramp,
+            status="filled",
+        )
+        self.rfqs.append(rfq)
+        edge = (your_ask - mid) if lifted else (mid - your_bid)
+        if lifted:
+            if action == "lifted_close":
+                post_message(client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {fill_price:.2f}. Done.", now)
+            elif action == "lifted_partial":
+                post_message(client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {qty} at {fill_price:.2f}. Done for those.", now)
+            else:
+                post_message(client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
+            outcome = f"bought {n} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
+        else:
+            if action == "hit_close":
+                post_message(client_id, "client", f"Bit low, but I'll take it \u2014 yours at {fill_price:.2f}. Done.", now)
+            elif action == "hit_partial":
+                post_message(client_id, "client", f"Only good for {n} at {fill_price:.2f}. Partial, done.", now)
+            else:
+                post_message(client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
+            outcome = f"sold {n} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
+        if action.endswith("_partial"):
+            outcome += f" (partial \u2014 you showed {qty})"
+        return {"type": "client_result", "rfq_id": rfq.rfq_id, "accepted": True,
+                "message": f"{client.name} {outcome}. {note}"}
 
     def handle_client_message(self, msg: dict) -> dict:
         rfq_id = msg.get("rfq_id")
@@ -200,6 +397,9 @@ async def ws_endpoint(websocket: WebSocket):
                 elif msg.get("type") == "client_quote":
                     await asyncio.sleep(1.2)  # "thinking" delay
                     await websocket.send_json(session.handle_client_quote(msg))
+                elif msg.get("type") == "unsolicited_quote":
+                    await asyncio.sleep(1.2)  # same "thinking" delay as client_quote
+                    await websocket.send_json(session.handle_unsolicited_quote(msg))
                 elif msg.get("type") == "request_market":
                     await websocket.send_json(session.handle_request_market(msg))
                 elif msg.get("type") == "client_message":
