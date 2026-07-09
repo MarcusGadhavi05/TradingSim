@@ -169,10 +169,11 @@ export default function Home() {
   const [fit, setFit] = useState<{ scale: number; w: number; h: number } | null>(null);
 
   // Viewport fit: uniform scale sized so the canvas fills the screen exactly
-  // (canvas = viewport / scale — no letterboxing on non-16:9 screens)
+  // (canvas = viewport / scale — no letterboxing on non-16:9 screens).
+  // Design canvas: smaller than 1920×1080 so everything renders ~33% larger.
   useEffect(() => {
     const update = () => {
-      const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+      const scale = Math.min(window.innerWidth / 1440, window.innerHeight / 810);
       setFit({
         scale,
         w: Math.ceil(window.innerWidth / scale),
@@ -569,7 +570,7 @@ export default function Home() {
       </div>
 
       {/* ── MAIN GRID: watchlist+news · chart+blotter · execution+clients ── */}
-      <div className="flex-1 min-h-0 p-2 grid grid-cols-[24fr_44fr_32fr] gap-2">
+      <div className="flex-1 min-h-0 p-2 grid grid-cols-[24fr_32fr_44fr] gap-2">
 
         {/* LEFT RAIL */}
         <div className="flex flex-col gap-2 min-h-0 min-w-0">
@@ -800,7 +801,7 @@ export default function Home() {
         <div className="flex flex-col gap-2 min-h-0 min-w-0">
 
           {/* EXECUTION */}
-          <Panel title="Execution" className="flex-[10]" headerExtra={
+          <Panel title="Execution" className="flex-[8]" headerExtra={
             <TabGroup index={exchangeTab} onIndexChange={setExchangeTab}>
               <TabList variant="solid" className="p-0.5">
                 <Tab className="text-[10px] font-bold uppercase tracking-wider py-0.5 px-3">Options</Tab>
@@ -809,7 +810,7 @@ export default function Home() {
             </TabGroup>
           }>
             <div className="flex-1 p-3 flex flex-col min-h-0">
-              <div className="flex items-center gap-2.5 mb-3 shrink-0 animate-fade-in">
+              <div className="flex items-center gap-2.5 mb-1 shrink-0 animate-fade-in">
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: accentHex }}></span>
                 <span className="text-[18px] font-bold tracking-tight text-tremor-content-strong leading-none">
                   {selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}
@@ -817,7 +818,7 @@ export default function Home() {
                 <ClassChip type={ASSET_TYPE[selectedUnderlying || ""] || "Equity"} />
               </div>
 
-              <div className="flex gap-2 mb-3 shrink-0">
+              <div className="flex gap-2 mb-1 shrink-0">
                 <div className="relative flex-1">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle pointer-events-none">Qty</span>
                   <input
@@ -844,9 +845,9 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto mb-3">
+              <div className="flex-1 min-h-[46px] overflow-y-auto mb-1">
                 {exchangeTab === 0 ? (
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-4 gap-2">
                     {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
                       const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
                       const isSel = contractType === type;
@@ -855,20 +856,16 @@ export default function Home() {
                         <div
                           key={type}
                           onClick={() => setContractType(type)}
-                          className={`p-2.5 cursor-pointer rounded-md border transition-all flex flex-col ${isSel ? "" : "border-tremor-border bg-tremor-background-muted/40 hover:bg-white/[0.03] hover:border-tremor-ring"}`}
+                          className={`px-2.5 py-1.5 cursor-pointer rounded-md border transition-all flex flex-col gap-0.5 ${isSel ? "" : "border-tremor-border bg-tremor-background-muted/40 hover:bg-white/[0.03] hover:border-tremor-ring"}`}
                           style={isSel ? { borderColor: accentHex, backgroundColor: accentHex + "14", boxShadow: `inset 0 0 0 1px ${accentHex}40` } : undefined}
                         >
-                          <span className="text-[12px] font-bold tracking-wide text-tremor-content-emphasis">{name.heading}</span>
-                          <span className="text-[10px] text-tremor-content-subtle mb-2">{name.sub}</span>
-                          <div className="flex items-end justify-between mt-auto">
-                            <div className="flex flex-col">
-                              <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle">Strike</span>
-                              <span className="text-[11px] font-mono text-tremor-content tabular-nums">{fmtPx(c?.strike || 0)}</span>
-                            </div>
-                            <div className="flex flex-col items-end">
-                              <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle">Premium</span>
-                              <span className="text-[17px] font-bold font-mono leading-none text-tremor-content-strong tabular-nums">{fmtPx(c?.premium || 0)}</span>
-                            </div>
+                          <div className="flex items-baseline justify-between gap-1">
+                            <span className="text-[12px] font-bold tracking-wide text-tremor-content-emphasis whitespace-nowrap">{name.heading}</span>
+                            <span className="text-[15px] font-bold font-mono leading-none text-tremor-content-strong tabular-nums">{fmtPx(c?.premium || 0)}</span>
+                          </div>
+                          <div className="flex items-baseline justify-between gap-1">
+                            <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle">Strike</span>
+                            <span className="text-[11px] font-mono text-tremor-content tabular-nums">{fmtPx(c?.strike || 0)}</span>
                           </div>
                         </div>
                       );
@@ -909,24 +906,24 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 mb-3 shrink-0">
+              <div className="grid grid-cols-2 gap-2.5 mb-1 shrink-0">
                 <div
                   onClick={() => placeOrder(-1)}
-                  className={`flex flex-col items-center justify-center py-2.5 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
+                  className={`flex flex-col items-center justify-center py-1.5 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
                 >
                   <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-loss/90 mb-1">Sell {"·"} Bid</span>
                   <span className="font-mono text-[19px] font-bold text-loss tabular-nums">{fmtPx(bidAsk.bid)}</span>
                 </div>
                 <div
                   onClick={() => placeOrder(1)}
-                  className={`flex flex-col items-center justify-center py-2.5 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
+                  className={`flex flex-col items-center justify-center py-1.5 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
                 >
                   <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-gain/90 mb-1">Buy {"·"} Ask</span>
                   <span className="font-mono text-[19px] font-bold text-gain tabular-nums">{fmtPx(bidAsk.ask)}</span>
                 </div>
               </div>
 
-              <div className="mt-auto shrink-0 border-t border-tremor-border pt-2 flex justify-between items-baseline">
+              <div className="mt-auto shrink-0 border-t border-tremor-border pt-1.5 flex justify-between items-baseline">
                 <span className="text-tremor-content-subtle uppercase text-[10px] font-bold tracking-[0.12em]">Notional Value</span>
                 <span className="font-mono text-[15px] text-tremor-content-strong tabular-nums">
                   {"£"}{fmt((Number(tradeQty) || 0) * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}
@@ -936,7 +933,7 @@ export default function Home() {
           </Panel>
 
           {/* CLIENT DESK */}
-          <Panel title="Client Desk" className="flex-[9]" headerExtra={
+          <Panel title="Client Desk" className="flex-[11]" headerExtra={
             (() => {
               const live = deskRows.filter((r: any) => r.rfq?.status === "open").length;
               return (
@@ -1012,7 +1009,7 @@ export default function Home() {
                           </div>
                         ))}
                       </div>
-                      <div className="p-2 border-t border-tremor-border shrink-0 flex flex-col gap-2">
+                      <div className="p-2 border-t border-tremor-border shrink-0 flex flex-col gap-1.5">
                         {live && (
                           <div className="flex gap-1 flex-wrap">
                             {["Coming now", "Working it", "Can't help"].map(txt => (
@@ -1028,47 +1025,43 @@ export default function Home() {
                             onKeyDown={e => { if (e.key === "Enter") { sendClientMsg(rfq.rfq_id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; } }}
                             className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors" />
                         )}
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex gap-2 items-end">
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle mb-0.5">Ticker</span>
-                              <input
-                                type="text"
-                                value={quoteTickers[qKey] ?? defTkr}
-                                onChange={e => setQuoteTickers(prev => ({ ...prev, [qKey]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0 transition-colors"
-                              />
-                            </div>
-                            <div className="flex flex-col min-w-0">
-                              <span className="text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle mb-0.5">Qty</span>
-                              <input
-                                type="text"
-                                value={quoteQtys[qKey] ?? defQty}
-                                onChange={e => setQuoteQtys(prev => ({ ...prev, [qKey]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0 transition-colors tabular-nums"
-                              />
-                            </div>
+                        <div className="flex gap-2 items-end">
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle mb-0.5">Ticker</span>
+                            <input
+                              type="text"
+                              value={quoteTickers[qKey] ?? defTkr}
+                              onChange={e => setQuoteTickers(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0 transition-colors"
+                            />
                           </div>
-                          <div className="flex gap-2 items-end">
-                            <div className="flex flex-col flex-1 min-w-0">
-                              <span className="text-[9px] uppercase tracking-wider font-bold text-loss/90 mb-0.5">Your Bid</span>
-                              <input type="number" placeholder="bid" value={quoteBids[qKey] || ""}
-                                onChange={e => setQuoteBids(prev => ({ ...prev, [qKey]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-loss/50 transition-colors tabular-nums" />
-                            </div>
-                            <div className="flex flex-col flex-1 min-w-0">
-                              <span className="text-[9px] uppercase tracking-wider font-bold text-gain/90 mb-0.5">Your Ask</span>
-                              <input type="number" placeholder="ask" value={quoteAsks[qKey] || ""}
-                                onChange={e => setQuoteAsks(prev => ({ ...prev, [qKey]: e.target.value }))}
-                                className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-gain/50 transition-colors tabular-nums" />
-                            </div>
-                            <button
-                              onClick={() => live ? sendClientQuote(rfq.rfq_id) : sendUnsolicitedQuote(row.client_id)}
-                              className="h-8 px-3 rounded-md text-[11px] font-bold uppercase tracking-wider bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis transition-colors shrink-0 cursor-pointer"
-                            >
-                              Quote
-                            </button>
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle mb-0.5">Qty</span>
+                            <input
+                              type="text"
+                              value={quoteQtys[qKey] ?? defQty}
+                              onChange={e => setQuoteQtys(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0 transition-colors tabular-nums"
+                            />
                           </div>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="text-[9px] uppercase tracking-wider font-bold text-loss/90 mb-0.5">Your Bid</span>
+                            <input type="number" placeholder="bid" value={quoteBids[qKey] || ""}
+                              onChange={e => setQuoteBids(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-loss/50 transition-colors tabular-nums w-full" />
+                          </div>
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <span className="text-[9px] uppercase tracking-wider font-bold text-gain/90 mb-0.5">Your Ask</span>
+                            <input type="number" placeholder="ask" value={quoteAsks[qKey] || ""}
+                              onChange={e => setQuoteAsks(prev => ({ ...prev, [qKey]: e.target.value }))}
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-gain/50 transition-colors tabular-nums w-full" />
+                          </div>
+                          <button
+                            onClick={() => live ? sendClientQuote(rfq.rfq_id) : sendUnsolicitedQuote(row.client_id)}
+                            className="h-8 px-3 rounded-md text-[11px] font-bold uppercase tracking-wider bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis transition-colors shrink-0 cursor-pointer"
+                          >
+                            Quote
+                          </button>
                         </div>
                         {!live && (
                           <div className="flex items-center justify-between gap-2">
