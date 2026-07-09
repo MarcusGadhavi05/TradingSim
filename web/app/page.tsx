@@ -809,23 +809,20 @@ export default function Home() {
               </TabList>
             </TabGroup>
           }>
-            <div className="flex-1 p-3 flex flex-col min-h-0">
+            <div className="flex-1 p-2.5 flex flex-col min-h-0">
               <div className="flex items-center gap-2.5 mb-1 shrink-0 animate-fade-in">
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: accentHex }}></span>
-                <span className="text-[18px] font-bold tracking-tight text-tremor-content-strong leading-none">
+                <span className="text-[18px] font-bold tracking-tight text-tremor-content-strong leading-none whitespace-nowrap">
                   {selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}
                 </span>
                 <ClassChip type={ASSET_TYPE[selectedUnderlying || ""] || "Equity"} />
-              </div>
-
-              <div className="flex gap-2 mb-1 shrink-0">
-                <div className="relative flex-1">
+                <div className="relative flex-1 min-w-0 ml-1">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle pointer-events-none">Qty</span>
                   <input
                     type="number"
                     value={tradeQty}
                     onChange={e => setTradeQty(e.target.value === "" ? "" : Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full bg-tremor-background-muted border border-tremor-border rounded-md h-9 pl-9 pr-2 font-mono text-[14px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/50 transition-colors tabular-nums"
+                    className="w-full bg-tremor-background-muted border border-tremor-border rounded-md h-8 pl-9 pr-2 font-mono text-[14px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/50 transition-colors tabular-nums"
                   />
                 </div>
                 <div className="flex gap-1">
@@ -833,7 +830,7 @@ export default function Home() {
                     <button
                       key={v}
                       onClick={() => setTradeQty(v)}
-                      className={`h-9 px-2.5 rounded-md text-[11px] font-bold font-mono transition-colors cursor-pointer border ${
+                      className={`h-8 px-2.5 rounded-md text-[11px] font-bold font-mono transition-colors cursor-pointer border ${
                         tradeQty === v
                           ? "bg-tremor-brand text-tremor-brand-inverted border-tremor-brand"
                           : "bg-tremor-background-muted text-tremor-content border-tremor-border hover:border-tremor-brand/40 hover:text-tremor-content-emphasis"
@@ -845,9 +842,9 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="flex-1 min-h-[46px] overflow-y-auto mb-1">
+              <div className="flex-1 min-h-[46px] overflow-y-auto mb-0.5">
                 {exchangeTab === 0 ? (
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-2 gap-1.5">
                     {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
                       const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
                       const isSel = contractType === type;
@@ -856,7 +853,7 @@ export default function Home() {
                         <div
                           key={type}
                           onClick={() => setContractType(type)}
-                          className={`px-2.5 py-1.5 cursor-pointer rounded-md border transition-all flex flex-col gap-0.5 ${isSel ? "" : "border-tremor-border bg-tremor-background-muted/40 hover:bg-white/[0.03] hover:border-tremor-ring"}`}
+                          className={`px-2.5 py-1 cursor-pointer rounded-md border transition-all flex flex-col gap-0.5 ${isSel ? "" : "border-tremor-border bg-tremor-background-muted/40 hover:bg-white/[0.03] hover:border-tremor-ring"}`}
                           style={isSel ? { borderColor: accentHex, backgroundColor: accentHex + "14", boxShadow: `inset 0 0 0 1px ${accentHex}40` } : undefined}
                         >
                           <div className="flex items-baseline justify-between gap-1">
@@ -878,25 +875,22 @@ export default function Home() {
                     const size = CONTRACT_SIZE[selectedUnderlying || ""] || 1;
                     const notional = px * size;
                     return (
-                      <div className="rounded-md border p-3 flex flex-col" style={{ borderColor: accentHex + "80", backgroundColor: accentHex + "0D" }}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[12px] uppercase font-black tracking-[0.15em]" style={{ color: accentHex }}>1M Future</span>
+                      <div className="rounded-md border p-2.5 flex flex-col gap-2" style={{ borderColor: accentHex + "80", backgroundColor: accentHex + "0D" }}>
+                        <div className="flex items-baseline gap-2.5">
+                          <span className="text-[12px] uppercase font-black tracking-[0.15em] whitespace-nowrap" style={{ color: accentHex }}>1M Future</span>
                           <span className="text-[11px] font-bold text-tremor-content font-mono">{selectedUnderlying}</span>
+                          <span className="ml-auto text-[20px] font-bold font-mono leading-none tracking-tight text-tremor-content-strong tabular-nums">{fmtPx(px)}</span>
                         </div>
-                        <div className="flex flex-col items-end mb-3">
-                          <span className="text-[26px] font-bold font-mono leading-none tracking-tight text-tremor-content-strong tabular-nums">{fmtPx(px)}</span>
-                          <span className="text-[9px] uppercase tracking-[0.15em] text-tremor-content-subtle mt-1.5">Live Futures Price</span>
-                        </div>
-                        <div className="grid grid-cols-2 gap-px bg-tremor-border rounded-md overflow-hidden">
+                        <div className="grid grid-cols-4 gap-px bg-tremor-border rounded-md overflow-hidden">
                           {([
                             ["Contract", "1M Future"],
                             ["Contract Size", fmt(size, 0)],
                             ["Notional / Contract", fmtMoney(notional)],
                             ["Asset Class", ASSET_TYPE[selectedUnderlying || ""] || "Equity"],
                           ] as const).map(([k, v]) => (
-                            <div key={k} className="bg-tremor-background p-2 flex flex-col gap-0.5">
-                              <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle">{k}</span>
-                              <span className="text-[11px] font-mono text-tremor-content tabular-nums">{v}</span>
+                            <div key={k} className="bg-tremor-background px-2 py-1.5 flex flex-col gap-0.5 min-w-0">
+                              <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle whitespace-nowrap">{k}</span>
+                              <span className="text-[11px] font-mono text-tremor-content tabular-nums whitespace-nowrap">{v}</span>
                             </div>
                           ))}
                         </div>
@@ -906,20 +900,20 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5 mb-1 shrink-0">
+              <div className="grid grid-cols-2 gap-2.5 mb-0.5 shrink-0">
                 <div
                   onClick={() => placeOrder(-1)}
-                  className={`flex flex-col items-center justify-center py-1.5 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
+                  className={`flex items-center justify-center gap-2.5 py-1 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
                 >
-                  <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-loss/90 mb-1">Sell {"·"} Bid</span>
-                  <span className="font-mono text-[19px] font-bold text-loss tabular-nums">{fmtPx(bidAsk.bid)}</span>
+                  <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-loss/90">Sell {"·"} Bid</span>
+                  <span className="font-mono text-[19px] font-bold text-loss tabular-nums leading-none">{fmtPx(bidAsk.bid)}</span>
                 </div>
                 <div
                   onClick={() => placeOrder(1)}
-                  className={`flex flex-col items-center justify-center py-1.5 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
+                  className={`flex items-center justify-center gap-2.5 py-1 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
                 >
-                  <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-gain/90 mb-1">Buy {"·"} Ask</span>
-                  <span className="font-mono text-[19px] font-bold text-gain tabular-nums">{fmtPx(bidAsk.ask)}</span>
+                  <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-gain/90">Buy {"·"} Ask</span>
+                  <span className="font-mono text-[19px] font-bold text-gain tabular-nums leading-none">{fmtPx(bidAsk.ask)}</span>
                 </div>
               </div>
 
