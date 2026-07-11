@@ -36,15 +36,19 @@ export default function Landing() {
         </span>
       </header>
 
-      {/* ── THE SPLIT ── */}
-      <div className="relative flex-1 grid grid-cols-2 min-h-0">
+      {/* ── THE SPLIT (diagonal, versus-screen) ── */}
+      <div className="relative flex-1 min-h-0 overflow-hidden">
 
         {/* SELL SIDE — the whole half is the door */}
-        <Link href="/sell-side" className="group relative flex flex-col items-center justify-center gap-7 overflow-hidden cursor-pointer">
+        <Link
+          href="/sell-side"
+          className="group absolute inset-0 cursor-pointer"
+          style={{ clipPath: "polygon(0 0, 54% 0, 46% 100%, 0 100%)" }}
+        >
           {/* hover wash */}
           <div
             className="absolute inset-0 opacity-40 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
-            style={{ background: "radial-gradient(ellipse 70% 60% at 50% 55%, rgba(201,169,106,0.10), transparent 70%)" }}
+            style={{ background: "radial-gradient(ellipse 42% 60% at 26% 55%, rgba(201,169,106,0.12), transparent 70%)" }}
           />
           {/* quote-ladder motif */}
           <div className="absolute inset-y-0 left-8 flex flex-col justify-center gap-2.5 font-mono text-[11px] tracking-wider text-tremor-content opacity-[0.10] group-hover:opacity-[0.16] transition-opacity duration-500 pointer-events-none tabular-nums">
@@ -54,6 +58,8 @@ export default function Landing() {
               </div>
             ))}
           </div>
+
+          <div className="absolute inset-y-0 left-0 w-1/2 flex flex-col items-center justify-center gap-7">
 
           <div className="relative flex items-center gap-3 animate-rise" style={{ animationDelay: "80ms" }}>
             <span className="font-mono text-[12px] tracking-[0.3em] text-tremor-brand">01 / MARKET MAKER</span>
@@ -74,17 +80,24 @@ export default function Landing() {
           <span className="relative font-mono text-[13px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-5 py-2.5 bg-tremor-brand/[0.06] transition-all duration-300 group-hover:bg-tremor-brand group-hover:text-tremor-brand-inverted group-hover:shadow-[0_0_32px_rgba(201,169,106,0.35)] animate-rise" style={{ animationDelay: "320ms" }}>
             [ ENTER THE DESK <span className="inline-block transition-transform duration-300 group-hover:translate-x-1">{"→"}</span> ]
           </span>
+
+          </div>
         </Link>
 
         {/* BUY SIDE — dimmed, stamped, inert */}
-        <div className="relative flex flex-col items-center justify-center gap-7 overflow-hidden cursor-not-allowed">
+        <div
+          className="absolute inset-0 cursor-not-allowed"
+          style={{ clipPath: "polygon(54% 0, 100% 0, 100% 100%, 46% 100%)" }}
+        >
           {/* sparkline motif */}
           <svg
-            className="absolute inset-x-8 bottom-10 h-40 opacity-[0.08] pointer-events-none"
+            className="absolute right-8 left-1/2 bottom-10 h-40 opacity-[0.08] pointer-events-none"
             viewBox="0 0 400 100" preserveAspectRatio="none" fill="none"
           >
             <path d="M0 78 L28 70 L52 74 L80 58 L108 64 L136 44 L164 52 L192 36 L220 46 L248 28 L276 38 L304 20 L332 30 L360 12 L400 18" stroke="#94A0B8" strokeWidth="1.5" />
           </svg>
+
+          <div className="absolute inset-y-0 right-0 w-1/2 flex flex-col items-center justify-center gap-7">
 
           <span className="relative font-mono text-[12px] tracking-[0.3em] text-tremor-content-subtle animate-rise" style={{ animationDelay: "80ms" }}>
             02 / PORTFOLIO MANAGER
@@ -111,10 +124,21 @@ export default function Landing() {
           <span className="relative font-mono text-[13px] tracking-[0.18em] text-tremor-content-subtle/70 border border-tremor-border rounded-md px-5 py-2.5 animate-rise" style={{ animationDelay: "320ms" }}>
             [ COMING SOON ]
           </span>
+
+          </div>
         </div>
 
-        {/* center divider + medallion */}
-        <div className="absolute inset-y-0 left-1/2 w-px bg-gradient-to-b from-transparent via-tremor-border to-transparent pointer-events-none" />
+        {/* diagonal divider + medallion */}
+        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 100 100" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="divider-fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#1c2536" stopOpacity="0" />
+              <stop offset="0.5" stopColor="#2a3650" stopOpacity="1" />
+              <stop offset="1" stopColor="#1c2536" stopOpacity="0" />
+            </linearGradient>
+          </defs>
+          <line x1="54" y1="0" x2="46" y2="100" stroke="url(#divider-fade)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        </svg>
         <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-tremor-background-muted border border-tremor-border flex items-center justify-center pointer-events-none">
           <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(201,169,106,0.25)]">
             <div className="w-2 h-2 -rotate-45 rounded-full bg-tremor-brand"></div>
