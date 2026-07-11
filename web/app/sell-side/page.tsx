@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import Link from "next/link";
 import {
   Badge,
   Table,
@@ -121,6 +122,7 @@ const shortTicker = (t: string) =>
 export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const [running, setRunning] = useState(false);
+  const [started, setStarted] = useState(false); // stays true once the first session begins
   const [waking, setWaking] = useState(false);
   const [simDuration, setSimDuration] = useState(3600);
   const [simTime, setSimTime] = useState(0);
@@ -201,6 +203,7 @@ export default function Home() {
   }, []);
 
   const startSim = useCallback(() => {
+    setStarted(true);
     setRunning(true);
     setNews([]);
     setTimeMap({});
@@ -521,6 +524,11 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {!started ? (
+        <Briefing startSim={startSim} />
+      ) : (
+        <>
 
       {/* ── MARKET TAPE ── */}
       <div className="h-10 border-b border-tremor-border flex items-center overflow-hidden shrink-0 bg-tremor-background-muted">
@@ -1075,7 +1083,87 @@ export default function Home() {
           </Panel>
         </div>
       </div>
+
+        </>
+      )}
     </main>
+    </div>
+  );
+}
+
+// --- Pre-session briefing (shown until the first Start) ---
+
+function Briefing({ startSim }: { startSim: () => void }) {
+  const steps: [string, string, string][] = [
+    ["01", "READ THE TAPE", "Prices and headlines replay in real time. Spot the moves before your clients do."],
+    ["02", "QUOTE THE CLIENTS", "RFQs land on the client desk. Show a two-way price — win the trade at your level."],
+    ["03", "HEDGE THE BOOK", "Lay risk off on the exchange with options and futures before the market runs."],
+  ];
+  return (
+    <div className="flex-1 min-h-0 relative flex flex-col items-center justify-center gap-7 overflow-hidden">
+      {/* champagne wash */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{ background: "radial-gradient(ellipse 55% 50% at 50% 40%, rgba(201,169,106,0.08), transparent 70%)" }}
+      />
+
+      <span className="relative font-mono text-[12px] tracking-[0.3em] text-tremor-brand animate-rise">
+        01 / SELL SIDE {"·"} PRE-SESSION BRIEFING
+      </span>
+
+      <h1 className="relative text-[46px] font-bold tracking-tight text-tremor-content-strong leading-tight text-center animate-rise" style={{ animationDelay: "100ms" }}>
+        The desk is yours for the hour.
+      </h1>
+
+      <p className="relative max-w-[560px] text-center text-[14px] leading-relaxed text-tremor-content animate-rise" style={{ animationDelay: "180ms" }}>
+        Twelve instruments, a book of clients, and sixty minutes of spring 2025
+        replayed live. Make your markets tight enough to win the trade {"—"} wide
+        enough to survive it.
+      </p>
+
+      {/* session parameters */}
+      <div className="relative grid grid-cols-4 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background/70 animate-rise" style={{ animationDelay: "260ms" }}>
+        {([
+          ["Capital", "£100,000"],
+          ["Clock", "60:00"],
+          ["Instruments", "12"],
+          ["Tape", "MAR–MAY 2025"],
+        ] as const).map(([k, v]) => (
+          <div key={k} className="px-8 py-3.5 flex flex-col items-center gap-1.5">
+            <span className="text-[9px] uppercase tracking-[0.2em] font-bold text-tremor-content-subtle">{k}</span>
+            <span className="font-mono text-[16px] text-tremor-content-strong tabular-nums whitespace-nowrap">{v}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* how the hour goes */}
+      <div className="relative grid grid-cols-3 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background/40 max-w-[880px] animate-rise" style={{ animationDelay: "340ms" }}>
+        {steps.map(([n, title, desc]) => (
+          <div key={n} className="px-6 py-4 flex flex-col gap-2">
+            <div className="flex items-baseline gap-2.5">
+              <span className="font-mono text-[12px] text-tremor-brand">{n}</span>
+              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-tremor-content-emphasis">{title}</span>
+            </div>
+            <p className="text-[12px] leading-relaxed text-tremor-content">{desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={startSim}
+        className="relative font-mono text-[14px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-7 py-3 bg-tremor-brand/[0.06] transition-all duration-300 hover:bg-tremor-brand hover:text-tremor-brand-inverted hover:shadow-[0_0_32px_rgba(201,169,106,0.35)] cursor-pointer animate-rise"
+        style={{ animationDelay: "420ms" }}
+      >
+        [ START SESSION {"→"} ]
+      </button>
+
+      <Link
+        href="/"
+        className="relative font-mono text-[10px] tracking-[0.22em] text-tremor-content-subtle hover:text-tremor-content transition-colors animate-rise"
+        style={{ animationDelay: "500ms" }}
+      >
+        {"←"} BACK TO THE LOBBY
+      </Link>
     </div>
   );
 }
