@@ -1,193 +1,144 @@
 import Link from "next/link";
 
-// --- Icons ---
+// Decorative, indicative levels for the footer tape (pre-session flavor only)
+const TAPE: [string, string, number][] = [
+  ["BARC", "297.85", 0.42], ["AZN", "11,752.0", -0.31], ["SPY", "573.20", 0.18],
+  ["NVDA", "115.42", 1.24], ["ASML", "681.30", -0.87], ["SAP", "254.90", 0.55],
+  ["GBPUSD", "1.2932", 0.09], ["EURUSD", "1.0841", -0.12], ["JPY", "149.75", 0.21],
+  ["IGLT", "84.12", -0.05], ["BZ", "71.05", -1.02], ["GC", "2,915.4", 0.64],
+];
 
-const TwoWayIcon = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M7 8h10" /><path d="m14 5 3 3-3 3" />
-    <path d="M17 16H7" /><path d="m10 13-3 3 3 3" />
-  </svg>
-);
+// Faint two-way quote ladder behind the sell-side half
+const LADDER: [string, string][] = [
+  ["114.85", "115.05"], ["114.90", "115.10"], ["114.95", "115.15"],
+  ["115.00", "115.20"], ["115.05", "115.25"], ["115.10", "115.30"],
+  ["115.15", "115.35"], ["115.20", "115.40"], ["115.25", "115.45"],
+  ["115.30", "115.50"], ["115.35", "115.55"], ["115.40", "115.60"],
+];
 
-const PortfolioIcon = () => (
-  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3" y="7" width="18" height="13" rx="2" />
-    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-    <path d="m7 15 3-3 2.5 2.5L17 10" />
-  </svg>
-);
-
-const CheckIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
-    <path d="M20 6 9 17l-5-5" />
-  </svg>
-);
-
-const ArrowIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M5 12h14" /><path d="m13 6 6 6-6 6" />
-  </svg>
-);
-
-// --- Page ---
+const GAIN = "#16C784";
+const LOSS = "#F6465D";
 
 export default function Landing() {
   return (
-    <main className="relative min-h-screen overflow-hidden bg-tremor-background-muted text-tremor-content-emphasis font-sans flex flex-col select-none">
-
-      {/* Background: fine grid, faded out radially + champagne glow behind the hero */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(28,37,54,0.55) 1px, transparent 1px), linear-gradient(90deg, rgba(28,37,54,0.55) 1px, transparent 1px)",
-          backgroundSize: "44px 44px",
-          maskImage: "radial-gradient(ellipse 90% 75% at 50% 38%, black 30%, transparent 100%)",
-          WebkitMaskImage: "radial-gradient(ellipse 90% 75% at 50% 38%, black 30%, transparent 100%)",
-        }}
-      />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{ background: "radial-gradient(ellipse 55% 42% at 50% 30%, rgba(201,169,106,0.09), transparent 70%)" }}
-      />
+    <main className="fixed inset-0 flex flex-col bg-tremor-background-muted text-tremor-content-emphasis font-sans select-none overflow-hidden">
 
       {/* ── HEADER ── */}
-      <header className="relative h-16 flex items-center justify-between px-8 shrink-0 border-b border-tremor-border/70">
+      <header className="h-14 flex items-center justify-between px-6 shrink-0 border-b border-tremor-border/70 bg-tremor-background/40">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(201,169,106,0.22)]">
-            <div className="w-2 h-2 -rotate-45 rounded-full bg-tremor-brand"></div>
+          <div className="w-7 h-7 rotate-45 rounded-[3px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center">
+            <div className="w-1.5 h-1.5 -rotate-45 rounded-full bg-tremor-brand"></div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-[14px] font-bold tracking-[0.28em] text-tremor-content-strong leading-none">DERIVATIVES&nbsp;DESK</span>
-            <span className="text-[10px] uppercase tracking-[0.18em] text-tremor-content-subtle mt-1">Multi-Asset Simulation</span>
-          </div>
+          <span className="text-[13px] font-bold tracking-[0.28em] text-tremor-content-strong">DERIVATIVES&nbsp;DESK</span>
         </div>
-        <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-tremor-content-subtle border border-tremor-border rounded-full px-3 py-1.5 bg-tremor-background/60">
-          Historical Replay {"·"} Mar {"–"} May 2025
+        <span className="font-mono text-[11px] tracking-[0.08em] text-tremor-content-subtle tabular-nums">
+          SESSION: MAR{"–"}MAY 2025 REPLAY <span className="mx-2 text-tremor-border">/</span> CAPITAL: {"£"}100,000.00 <span className="mx-2 text-tremor-border">/</span> 60-MIN
         </span>
       </header>
 
-      {/* ── HERO + CARDS ── */}
-      <div className="relative flex-1 flex flex-col items-center justify-center px-6 py-12 gap-10">
+      {/* ── THE SPLIT ── */}
+      <div className="relative flex-1 grid grid-cols-2 min-h-0">
 
-        <div className="flex flex-col items-center text-center gap-4 animate-rise">
-          <span className="text-[11px] uppercase tracking-[0.35em] font-bold text-tremor-brand">
-            Multi-Asset Derivatives Simulation
-          </span>
-          <h1 className="text-[44px] md:text-[56px] font-bold tracking-tight text-tremor-content-strong leading-[1.05]">
-            Two sides of the market.
-            <br />
-            <span className="text-tremor-content">Pick yours.</span>
-          </h1>
-          <p className="max-w-xl text-[15px] leading-relaxed text-tremor-content">
-            Trade a live historical replay across equities, FX, rates and commodities
-            {" — "}with {"£"}100,000 of starting capital and a desk full of clients.
+        {/* SELL SIDE — the whole half is the door */}
+        <Link href="/sell-side" className="group relative flex flex-col items-center justify-center gap-7 overflow-hidden cursor-pointer">
+          {/* hover wash */}
+          <div
+            className="absolute inset-0 opacity-40 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
+            style={{ background: "radial-gradient(ellipse 70% 60% at 50% 55%, rgba(201,169,106,0.10), transparent 70%)" }}
+          />
+          {/* quote-ladder motif */}
+          <div className="absolute inset-y-0 left-8 flex flex-col justify-center gap-2.5 font-mono text-[11px] tracking-wider text-tremor-content opacity-[0.10] group-hover:opacity-[0.16] transition-opacity duration-500 pointer-events-none tabular-nums">
+            {LADDER.map(([b, a], i) => (
+              <div key={i} className="flex gap-6">
+                <span>{b}</span><span className="text-tremor-border">/</span><span>{a}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="relative flex items-center gap-3 animate-rise" style={{ animationDelay: "80ms" }}>
+            <span className="font-mono text-[12px] tracking-[0.3em] text-tremor-brand">01 / MARKET MAKER</span>
+            <span className="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-[0.2em] text-gain">
+              <span className="w-1.5 h-1.5 rounded-full bg-gain animate-pulse-dot" />LIVE
+            </span>
+          </div>
+
+          <h2 className="relative text-[104px] leading-[0.92] font-bold tracking-[-0.03em] text-tremor-content-strong text-center animate-rise transition-transform duration-500 group-hover:scale-[1.02]" style={{ animationDelay: "160ms" }}>
+            SELL<br />SIDE
+          </h2>
+
+          <p className="relative max-w-[360px] text-center text-[13px] leading-relaxed text-tremor-content animate-rise" style={{ animationDelay: "240ms" }}>
+            Run the dealer desk. Stream two-way prices, negotiate client RFQs,
+            and manage the book while the tape moves against you.
           </p>
+
+          <span className="relative font-mono text-[13px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-5 py-2.5 bg-tremor-brand/[0.06] transition-all duration-300 group-hover:bg-tremor-brand group-hover:text-tremor-brand-inverted group-hover:shadow-[0_0_32px_rgba(201,169,106,0.35)] animate-rise" style={{ animationDelay: "320ms" }}>
+            [ ENTER THE DESK <span className="inline-block transition-transform duration-300 group-hover:translate-x-1">{"→"}</span> ]
+          </span>
+        </Link>
+
+        {/* BUY SIDE — dimmed, stamped, inert */}
+        <div className="relative flex flex-col items-center justify-center gap-7 overflow-hidden cursor-not-allowed">
+          {/* sparkline motif */}
+          <svg
+            className="absolute inset-x-8 bottom-10 h-40 opacity-[0.08] pointer-events-none"
+            viewBox="0 0 400 100" preserveAspectRatio="none" fill="none"
+          >
+            <path d="M0 78 L28 70 L52 74 L80 58 L108 64 L136 44 L164 52 L192 36 L220 46 L248 28 L276 38 L304 20 L332 30 L360 12 L400 18" stroke="#94A0B8" strokeWidth="1.5" />
+          </svg>
+
+          <span className="relative font-mono text-[12px] tracking-[0.3em] text-tremor-content-subtle animate-rise" style={{ animationDelay: "80ms" }}>
+            02 / PORTFOLIO MANAGER
+          </span>
+
+          <div className="relative animate-rise" style={{ animationDelay: "160ms" }}>
+            <h2
+              className="text-[104px] leading-[0.92] font-bold tracking-[-0.03em] text-center text-transparent"
+              style={{ WebkitTextStroke: "1.5px #2a3650" }}
+            >
+              BUY<br />SIDE
+            </h2>
+            {/* rubber stamp */}
+            <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 -rotate-[8deg] font-mono text-[13px] tracking-[0.3em] text-tremor-content-subtle border-2 border-tremor-content-subtle/50 rounded px-4 py-1.5 bg-tremor-background-muted/80 whitespace-nowrap">
+              IN DEVELOPMENT
+            </span>
+          </div>
+
+          <p className="relative max-w-[360px] text-center text-[13px] leading-relaxed text-tremor-content-subtle animate-rise" style={{ animationDelay: "240ms" }}>
+            Sit on the other side of the phone. Work orders through dealers,
+            fight for the best price, and build the portfolio.
+          </p>
+
+          <span className="relative font-mono text-[13px] tracking-[0.18em] text-tremor-content-subtle/70 border border-tremor-border rounded-md px-5 py-2.5 animate-rise" style={{ animationDelay: "320ms" }}>
+            [ COMING SOON ]
+          </span>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 w-full max-w-[960px]">
-
-          {/* SELL SIDE — live, wired to the sim */}
-          <Link
-            href="/sell-side"
-            className="group relative flex flex-col gap-5 rounded-xl border border-tremor-border bg-tremor-background/80 p-7 overflow-hidden transition-all duration-300 hover:border-tremor-brand/50 hover:-translate-y-1 hover:shadow-[0_18px_60px_-18px_rgba(201,169,106,0.35)] animate-rise cursor-pointer"
-            style={{ animationDelay: "120ms" }}
-          >
-            {/* top accent line */}
-            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-tremor-brand/70 to-transparent opacity-60 group-hover:opacity-100 transition-opacity" />
-
-            <div className="flex items-center justify-between">
-              <div className="w-11 h-11 rounded-lg border border-tremor-brand/40 bg-tremor-brand/10 text-tremor-brand flex items-center justify-center">
-                <TwoWayIcon />
-              </div>
-              <span className="inline-flex items-center gap-2 text-[10px] uppercase tracking-[0.15em] font-bold text-gain bg-gain/10 border border-gain/25 rounded-full px-2.5 py-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-gain animate-pulse-dot" />
-                Live
-              </span>
-            </div>
-
-            <div>
-              <h2 className="text-[26px] font-bold tracking-tight text-tremor-content-strong leading-none">Sell Side</h2>
-              <p className="text-[11px] uppercase tracking-[0.18em] font-bold text-tremor-brand/90 mt-2">Market Maker {"·"} Dealer Desk</p>
-            </div>
-
-            <p className="text-[13px] leading-relaxed text-tremor-content">
-              Run the derivatives desk. Stream two-way prices, negotiate client RFQs,
-              and manage the book while the tape moves against you.
-            </p>
-
-            <ul className="flex flex-col gap-2.5">
-              {[
-                "Quote & negotiate live client RFQs",
-                "Options & futures on 12 instruments",
-                "Real-time P&L, risk and news replay",
-              ].map((f) => (
-                <li key={f} className="flex items-center gap-2.5 text-[12px] text-tremor-content-emphasis">
-                  <span className="text-tremor-brand"><CheckIcon /></span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-
-            <span className="mt-auto inline-flex items-center justify-center gap-2 h-11 rounded-md bg-tremor-brand text-tremor-brand-inverted text-[12px] font-bold uppercase tracking-[0.12em] shadow-[0_0_24px_rgba(201,169,106,0.25)] transition-all group-hover:bg-tremor-brand-emphasis group-hover:gap-3">
-              Enter the Desk
-              <ArrowIcon />
-            </span>
-          </Link>
-
-          {/* BUY SIDE — in development, intentionally inert */}
-          <div
-            className="relative flex flex-col gap-5 rounded-xl border border-tremor-border/70 bg-tremor-background/40 p-7 overflow-hidden animate-rise"
-            style={{ animationDelay: "220ms" }}
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-11 h-11 rounded-lg border border-tremor-border bg-tremor-background-subtle/60 text-tremor-content-subtle flex items-center justify-center">
-                <PortfolioIcon />
-              </div>
-              <span className="text-[10px] uppercase tracking-[0.15em] font-bold text-tremor-content-subtle bg-tremor-background-subtle/60 border border-tremor-border rounded-full px-2.5 py-1">
-                In Development
-              </span>
-            </div>
-
-            <div>
-              <h2 className="text-[26px] font-bold tracking-tight text-tremor-content-emphasis/80 leading-none">Buy Side</h2>
-              <p className="text-[11px] uppercase tracking-[0.18em] font-bold text-tremor-content-subtle mt-2">Portfolio Manager {"·"} Institutional Client</p>
-            </div>
-
-            <p className="text-[13px] leading-relaxed text-tremor-content-subtle">
-              Sit on the other side of the phone. Work orders through dealers, fight
-              for the best price, and build a portfolio against the macro tape.
-            </p>
-
-            <ul className="flex flex-col gap-2.5">
-              {[
-                "Request markets from competing dealers",
-                "Build & manage a multi-asset portfolio",
-                "Performance benchmarked vs. the tape",
-              ].map((f) => (
-                <li key={f} className="flex items-center gap-2.5 text-[12px] text-tremor-content-subtle">
-                  <span className="opacity-50"><CheckIcon /></span>
-                  {f}
-                </li>
-              ))}
-            </ul>
-
-            <span className="mt-auto inline-flex items-center justify-center h-11 rounded-md border border-tremor-border bg-tremor-background-subtle/40 text-tremor-content-subtle text-[12px] font-bold uppercase tracking-[0.12em] cursor-not-allowed">
-              Coming Soon
-            </span>
+        {/* center divider + medallion */}
+        <div className="absolute inset-y-0 left-1/2 w-px bg-gradient-to-b from-transparent via-tremor-border to-transparent pointer-events-none" />
+        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-16 rounded-full bg-tremor-background-muted border border-tremor-border flex items-center justify-center pointer-events-none">
+          <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(201,169,106,0.25)]">
+            <div className="w-2 h-2 -rotate-45 rounded-full bg-tremor-brand"></div>
           </div>
         </div>
       </div>
 
-      {/* ── FOOTER STRIP ── */}
-      <footer className="relative h-12 shrink-0 border-t border-tremor-border/70 flex items-center justify-center gap-3 px-6 text-[10px] uppercase tracking-[0.18em] font-bold text-tremor-content-subtle animate-rise" style={{ animationDelay: "320ms" }}>
-        <span>{"£"}100,000 Starting Capital</span>
-        <span className="text-tremor-border">|</span>
-        <span>12 Instruments</span>
-        <span className="text-tremor-border">|</span>
-        <span>Equities {"·"} FX {"·"} Rates {"·"} Commodities</span>
-        <span className="text-tremor-border">|</span>
-        <span>60-Minute Sessions</span>
+      {/* ── FOOTER TAPE ── */}
+      <footer className="h-10 shrink-0 border-t border-tremor-border/70 flex items-center overflow-hidden bg-tremor-background/40">
+        <div className="animate-marquee whitespace-nowrap">
+          {[1, 2].map((iter) => (
+            <div key={iter} className="flex shrink-0">
+              {TAPE.map(([tkr, px, pct]) => (
+                <div key={tkr + iter} className="flex items-center gap-2 px-5 h-10 border-r border-tremor-border/40">
+                  <span className="font-bold text-[11px] tracking-wide text-tremor-content">{tkr}</span>
+                  <span className="font-mono text-[11px] text-tremor-content-emphasis tabular-nums">{px}</span>
+                  <span className="font-mono text-[10px] tabular-nums" style={{ color: pct >= 0 ? GAIN : LOSS }}>
+                    {pct >= 0 ? "▴" : "▾"} {Math.abs(pct).toFixed(2)}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </footer>
     </main>
   );
