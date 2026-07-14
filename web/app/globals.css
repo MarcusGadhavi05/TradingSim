@@ -2,11 +2,12 @@
 @source "../node_modules/@tremor/**/*.{js,ts,jsx,tsx}";
 
 /*
- * Theme — "ink & champagne" institutional dark.
- * Palette validated with dataviz six-checks against surface #0C111C:
+ * Theme — "ink & champagne" institutional dark, crisped 2026-07-12:
+ * deeper cooler blacks, brighter hairline borders, more luminous chrome.
+ * Data palette unchanged — validated with dataviz six-checks against surface:
  *   asset classes  blue #3987E5 · cyan #12A5C4 · gold #C98500 · magenta #D55181
- *   P&L status     gain #16C784 · loss #F6465D  (reserved — never series colors)
- *   brand accent   champagne #C9A96A (chrome only, never a data mark)
+ *   P&L status     gain #18D690 · loss #FF4D64  (reserved — never series colors)
+ *   brand accent   champagne #D4B374 (chrome only, never a data mark)
  */
 @theme {
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
@@ -14,51 +15,54 @@
 
   /* Bare names drive Tailwind v4 utilities (border-tremor-border, bg-tremor-brand, …);
      the -DEFAULT twins cover Tremor's own compiled class names. */
-  --color-tremor-brand: #c9a96a;
-  --color-tremor-brand-faint: #211b0f;
-  --color-tremor-brand-muted: #3a311d;
-  --color-tremor-brand-subtle: #a8894e;
-  --color-tremor-brand-DEFAULT: #c9a96a;
-  --color-tremor-brand-emphasis: #e3c98f;
-  --color-tremor-brand-inverted: #0c111c;
+  --color-tremor-brand: #d4b374;
+  --color-tremor-brand-faint: #251d0e;
+  --color-tremor-brand-muted: #423722;
+  --color-tremor-brand-subtle: #b39457;
+  --color-tremor-brand-DEFAULT: #d4b374;
+  --color-tremor-brand-emphasis: #eed9a3;
+  --color-tremor-brand-inverted: #0a101c;
 
-  --color-tremor-background: #0c111c;
-  --color-tremor-background-muted: #070b14;
-  --color-tremor-background-subtle: #111a2b;
-  --color-tremor-background-DEFAULT: #0c111c;
-  --color-tremor-background-emphasis: #1c2536;
+  --color-tremor-background: #0a101c;
+  --color-tremor-background-muted: #05080f;
+  --color-tremor-background-subtle: #111b2e;
+  --color-tremor-background-DEFAULT: #0a101c;
+  --color-tremor-background-emphasis: #1c2740;
 
-  --color-tremor-border: #1c2536;
-  --color-tremor-border-DEFAULT: #1c2536;
-  --color-tremor-ring: #2a3650;
-  --color-tremor-ring-DEFAULT: #2a3650;
+  --color-tremor-border: #24314e;
+  --color-tremor-border-DEFAULT: #24314e;
+  --color-tremor-ring: #33456b;
+  --color-tremor-ring-DEFAULT: #33456b;
 
-  --color-tremor-content: #94a0b8;
-  --color-tremor-content-subtle: #55617a;
-  --color-tremor-content-DEFAULT: #94a0b8;
-  --color-tremor-content-emphasis: #e6ebf4;
+  --color-tremor-content: #9caccb;
+  --color-tremor-content-subtle: #5e6d8f;
+  --color-tremor-content-DEFAULT: #9caccb;
+  --color-tremor-content-emphasis: #eef3fb;
   --color-tremor-content-strong: #ffffff;
-  --color-tremor-content-inverted: #070b14;
+  --color-tremor-content-inverted: #05080f;
 
-  --color-gain: #16c784;
-  --color-loss: #f6465d;
+  --color-gain: #18d690;
+  --color-loss: #ff4d64;
 }
 
 body {
-  background: #070b14;
-  color: #e6ebf4;
+  background: #05080f;
+  color: #eef3fb;
   margin: 0;
   font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-::selection { background: rgba(201, 169, 106, 0.25); }
+::selection { background: rgba(212, 179, 116, 0.3); }
 
 /* Thin themed scrollbars */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #1c2536; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #2a3650; }
-* { scrollbar-width: thin; scrollbar-color: #1c2536 transparent; }
+::-webkit-scrollbar-thumb { background: #24314e; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #33456b; }
+* { scrollbar-width: thin; scrollbar-color: #24314e transparent; }
 
 /* Motion */
 @keyframes fade-in {
@@ -74,14 +78,14 @@ body {
 .animate-pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 
 @keyframes pulse-buy {
-  0% { box-shadow: 0 0 0 0 rgba(22, 199, 132, 0.55); }
-  100% { box-shadow: 0 0 0 12px rgba(22, 199, 132, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(24, 214, 144, 0.55); }
+  100% { box-shadow: 0 0 0 12px rgba(24, 214, 144, 0); }
 }
 .btn-pulse-buy { animation: pulse-buy 320ms ease-out; }
 
 @keyframes pulse-sell {
-  0% { box-shadow: 0 0 0 0 rgba(246, 70, 93, 0.55); }
-  100% { box-shadow: 0 0 0 12px rgba(246, 70, 93, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(255, 77, 100, 0.55); }
+  100% { box-shadow: 0 0 0 12px rgba(255, 77, 100, 0); }
 }
 .btn-pulse-sell { animation: pulse-sell 320ms ease-out; }
 

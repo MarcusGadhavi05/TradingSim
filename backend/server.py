@@ -21,7 +21,7 @@ from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
 from contracts import build_menu, price_contract, liquidity_quote, Contract
 from portfolio import Portfolio
-from clients import seed_rfqs, evaluate_two_way, evaluate_unsolicited, maybe_spawn_rfq, expire_rfqs, solicit_rfq, CLIENTS, RFQ, MAX_COUNTER_ROUNDS, apply_message, post_message, all_threads
+from clients import seed_rfqs, evaluate_two_way, evaluate_unsolicited, maybe_spawn_rfq, qty_in_band, solicit_rfq, CLIENTS, RFQ, MAX_COUNTER_ROUNDS, apply_message, post_message, all_threads
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
@@ -39,6 +39,16 @@ def _short_ticker(t: str) -> str:
     for sfx in ("=X", "=F", ".L", ".AS", ".DE"):
         t = t.replace(sfx, "")
     return t
+
+
+def _fmt_px(px: float) -> str:
+    """Chat-friendly price: more decimals for small premiums (FX options ~0.004)."""
+    a = abs(px)
+    if a >= 10:
+        return f"{px:.2f}"
+    if a >= 1:
+        return f"{px:.3f}"
+    return f"{px:.4f}"
 
 app = FastAPI()
 app.add_middleware(
@@ -138,6 +148,9 @@ class SimSession:
         spot = self.current_prices[contract.underlying]
         mid = price_contract(contract, spot)
         now = self.sim_time
+        if mid <= 0:
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": "Pricing error — this contract has no fair value right now. No trade."}
 
         # Derive the short-form ticker the frontend displays/sends
         real_ticker = rfq.contract_id.rsplit("_", 1)[0]  # "GBPUSD=X_bullish" → "GBPUSD=X"
@@ -152,22 +165,28 @@ class SimSession:
         quoted_qty = rfq.quantity if _qty_raw is None else int(_qty_raw)
 
         ticker_ok = quoted_ticker.upper() == real_short.upper()
-        qty_ok    = quoted_qty == rfq.quantity
+        qty_ok    = qty_in_band(rfq.quantity, quoted_qty)
         if not ticker_ok or not qty_ok:
-            post_message(rfq.client_id, "client",
-                         f"I asked for {rfq.quantity} {real_short}, not "
-                         f"{quoted_qty} {quoted_ticker}. Quote what I asked.", now)
+            if not ticker_ok:
+                post_message(rfq.client_id, "client",
+                             f"I asked for {rfq.quantity} {real_short}, not "
+                             f"{quoted_qty} {quoted_ticker}. Quote what I asked.", now)
+            else:
+                post_message(rfq.client_id, "client",
+                             f"I asked for {rfq.quantity} {real_short} — {quoted_qty} is "
+                             f"way off my size. Get closer and we can talk.", now)
             parts = []
             if not ticker_ok:
                 parts.append(f"ticker ({quoted_ticker} ≠ {real_short})")
             if not qty_ok:
-                parts.append(f"quantity ({quoted_qty} ≠ {rfq.quantity})")
+                parts.append(f"quantity ({quoted_qty} too far from {rfq.quantity})")
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
                     "message": f"Wrong {' and '.join(parts)} — {rfq.client_name} wants "
                                f"{rfq.quantity} {real_short}. RFQ still open."}
 
         post_message(rfq.client_id, "you", f"{your_bid:.4f} / {your_ask:.4f}", now)
-        traded, dealer_qty, fill_price, action = evaluate_two_way(rfq, your_bid, your_ask, mid, now)
+        traded, dealer_qty, fill_price, action = evaluate_two_way(rfq, your_bid, your_ask, mid, now,
+                                                                  offered_qty=quoted_qty)
 
         if action == "invalid":
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
@@ -175,30 +194,57 @@ class SimSession:
 
         if traded:
             note = self.portfolio.trade(contract, dealer_qty, fill_price)
-            rfq.status = "filled"
             n = abs(dealer_qty)
+            remaining = rfq.quantity - n   # reduced fills keep the RFQ open for the balance
             lifted = action.startswith("lifted")
             edge = (your_ask - mid) if lifted else (mid - your_bid)
             if lifted:
                 if action == "lifted_close":
-                    post_message(rfq.client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {fill_price:.2f}. Done.", now)
+                    post_message(rfq.client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {_fmt_px(fill_price)}. Done.", now)
                 elif action == "lifted_partial":
-                    post_message(rfq.client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {rfq.quantity} at {fill_price:.2f}. Done for those.", now)
+                    post_message(rfq.client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {rfq.quantity} at {_fmt_px(fill_price)}. Show me better for the other {remaining}.", now)
+                elif action == "lifted_short":
+                    post_message(rfq.client_id, "client", f"Done \u2014 lifting {n} at {_fmt_px(fill_price)}. Still need the other {remaining} though.", now)
                 else:
-                    post_message(rfq.client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
+                    post_message(rfq.client_id, "client", f"Lifting your offer at {_fmt_px(fill_price)}. Done.", now)
                 outcome = f"bought {n} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
             else:
                 if action == "hit_close":
-                    post_message(rfq.client_id, "client", f"Bit low, but I'll take it \u2014 yours at {fill_price:.2f}. Done.", now)
+                    post_message(rfq.client_id, "client", f"Bit low, but I'll take it \u2014 yours at {_fmt_px(fill_price)}. Done.", now)
                 elif action == "hit_partial":
-                    post_message(rfq.client_id, "client", f"Only good for {n} at {fill_price:.2f}. Partial, done.", now)
+                    post_message(rfq.client_id, "client", f"Only good for {n} at {_fmt_px(fill_price)}. Come back better on the other {remaining}.", now)
+                elif action == "hit_short":
+                    post_message(rfq.client_id, "client", f"Yours for {n} at {_fmt_px(fill_price)}. Done \u2014 balance of {remaining} still to go.", now)
                 else:
-                    post_message(rfq.client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
+                    post_message(rfq.client_id, "client", f"Yours at {_fmt_px(fill_price)}. Done.", now)
                 outcome = f"sold {n} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
-            if action.endswith("_partial"):
-                outcome += f" (partial \u2014 they asked for {rfq.quantity})"
+            if remaining > 0:
+                rfq.quantity = remaining
+                rfq.counter_qty = 0          # any size floor referred to the old total
+                rfq.last_answered_sec = now  # fresh patience for the balance
+                outcome += f" ({remaining} left to work \u2014 RFQ stays open)"
+            else:
+                rfq.status = "filled"
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": True,
                     "message": f"{rfq.client_name} {outcome}. {note}"}
+
+        if action == "counter_qty":
+            # price is fine, size is too light — dealer_qty carries the compromise size.
+            # Size haggling never burns counter_rounds or walks: the client likes the
+            # level, so they hold their floor and keep the RFQ open.
+            compromise = dealer_qty
+            if rfq.counter_qty and quoted_qty < rfq.counter_qty:
+                post_message(rfq.client_id, "client",
+                             f"I said {rfq.counter_qty} — that's as low as I'll go. "
+                             f"Do {rfq.counter_qty} at your level and we're done.", now)
+                return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                        "message": f"{rfq.client_name} is holding at {rfq.counter_qty}. Quote that size."}
+            rfq.counter_qty = compromise
+            post_message(rfq.client_id, "client",
+                         f"{quoted_qty}'s too light — I asked for {rfq.quantity}. "
+                         f"Do {compromise} and we'll trade at your level.", now)
+            return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                    "message": f"{rfq.client_name} countered on size: show at least {compromise}. Re-quote."}
 
         # action == "counter": fill_price carries the client's counter level
         counter_px = fill_price
@@ -211,10 +257,10 @@ class SimSession:
         rfq.counter_px = counter_px
         if rfq.side == "buy":
             post_message(rfq.client_id, "client",
-                         f"Can't pay {your_ask:.2f}. Show me {counter_px:.2f} and I'll do the full {rfq.quantity}.", now)
+                         f"Can't pay {_fmt_px(your_ask)}. Show me {_fmt_px(counter_px)} and I'll do the full {rfq.quantity}.", now)
         else:
             post_message(rfq.client_id, "client",
-                         f"{your_bid:.2f} doesn't work. I need {counter_px:.2f} for the {rfq.quantity}.", now)
+                         f"{_fmt_px(your_bid)} doesn't work. I need {_fmt_px(counter_px)} for the {rfq.quantity}.", now)
         return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
                 "message": f"{rfq.client_name} countered at {counter_px:.4f} \u2014 improve your market and re-quote."}
 
@@ -261,6 +307,9 @@ class SimSession:
         spot = self.current_prices[contract.underlying]
         mid = price_contract(contract, spot)
         now = self.sim_time
+        if mid <= 0:
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": "Pricing error — this contract has no fair value right now. No trade."}
 
         post_message(client_id, "you", f"{your_bid:.4f} / {your_ask:.4f}", now)
         traded, dealer_qty, fill_price, action = evaluate_unsolicited(
@@ -277,7 +326,7 @@ class SimSession:
 
         if action == "passed":
             post_message(client_id, "client",
-                         f"Fair's around {mid:.2f} \u2014 your {your_bid:.2f}/{your_ask:.2f} is too wide, I'll pass.", now)
+                         f"Fair's around {_fmt_px(mid)} \u2014 your {_fmt_px(your_bid)}/{_fmt_px(your_ask)} is too wide, I'll pass.", now)
             return {"type": "client_result", "rfq_id": None, "accepted": False,
                     "message": f"{client.name} passed \u2014 fair was ~{mid:.4f}, your market sat outside their interest."}
 
@@ -297,10 +346,10 @@ class SimSession:
             self.unsol_counters[key] = {"px": counter_px, "rounds": rounds + 1, "created_sec": now}
             if client.interest_map[contract.contract_id]["desired_side"] == "buy":
                 post_message(client_id, "client",
-                             f"Can't pay {your_ask:.2f}. Show me {counter_px:.2f} and I'll do the full {qty}.", now)
+                             f"Can't pay {_fmt_px(your_ask)}. Show me {_fmt_px(counter_px)} and I'll do the full {qty}.", now)
             else:
                 post_message(client_id, "client",
-                             f"{your_bid:.2f} doesn't work. I need {counter_px:.2f} for the {qty}.", now)
+                             f"{_fmt_px(your_bid)} doesn't work. I need {_fmt_px(counter_px)} for the {qty}.", now)
             return {"type": "client_result", "rfq_id": None, "accepted": False,
                     "message": f"{client.name} countered at {counter_px:.4f} \u2014 improve your market and re-quote."}
 
@@ -328,19 +377,19 @@ class SimSession:
         edge = (your_ask - mid) if lifted else (mid - your_bid)
         if lifted:
             if action == "lifted_close":
-                post_message(client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {fill_price:.2f}. Done.", now)
+                post_message(client_id, "client", f"You're wide, but fine \u2014 lifting your offer at {_fmt_px(fill_price)}. Done.", now)
             elif action == "lifted_partial":
-                post_message(client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {qty} at {fill_price:.2f}. Done for those.", now)
+                post_message(client_id, "client", f"Too wide for the full amount \u2014 I'll take {n} of {qty} at {_fmt_px(fill_price)}. Done for those.", now)
             else:
-                post_message(client_id, "client", f"Lifting your offer at {fill_price:.2f}. Done.", now)
+                post_message(client_id, "client", f"Lifting your offer at {_fmt_px(fill_price)}. Done.", now)
             outcome = f"bought {n} from you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are short, {edge:+.4f}/unit edge"
         else:
             if action == "hit_close":
-                post_message(client_id, "client", f"Bit low, but I'll take it \u2014 yours at {fill_price:.2f}. Done.", now)
+                post_message(client_id, "client", f"Bit low, but I'll take it \u2014 yours at {_fmt_px(fill_price)}. Done.", now)
             elif action == "hit_partial":
-                post_message(client_id, "client", f"Only good for {n} at {fill_price:.2f}. Partial, done.", now)
+                post_message(client_id, "client", f"Only good for {n} at {_fmt_px(fill_price)}. Partial, done.", now)
             else:
-                post_message(client_id, "client", f"Yours at {fill_price:.2f}. Done.", now)
+                post_message(client_id, "client", f"Yours at {_fmt_px(fill_price)}. Done.", now)
             outcome = f"sold {n} to you at {fill_price:.4f} (fair {mid:.4f}) \u2014 you are long, {edge:+.4f}/unit edge"
         if action.endswith("_partial"):
             outcome += f" (partial \u2014 you showed {qty})"
@@ -419,7 +468,6 @@ async def ws_endpoint(websocket: WebSocket):
             session.current_prices = dict(tick.prices)
             session.tick_idx = i
             session.sim_time = tick.sim_time
-            expire_rfqs(session.rfqs, tick.sim_time)
             maybe_spawn_rfq(session.rfqs, tick.sim_time, list(session.contracts_by_id.keys()))
 
             # Append to history

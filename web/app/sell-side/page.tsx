@@ -76,11 +76,11 @@ const ASSET_HEX: Record<string, string> = {
 };
 
 // Reserved P&L status colors — never used for series identity
-const GAIN = "#16C784";
-const LOSS = "#F6465D";
+const GAIN = "#18D690";
+const LOSS = "#FF4D64";
 
 const NEWS_HEX: Record<string, string> = {
-  "macro": "#C9A96A", "uk": "#3987E5", "us": "#E66767", "eu": "#9085E9",
+  "macro": "#D4B374", "uk": "#3987E5", "us": "#E66767", "eu": "#9085E9",
 };
 
 const CATEGORY_MAP: Record<string, string> = {
@@ -153,7 +153,6 @@ export default function Home() {
   const contractTypeRef = useRef<string>("bullish");
   const exchangeTabRef = useRef<number>(0);
   const tradeQtyRef = useRef<number | "">("");
-  const activeRfqContractIdRef = useRef<string | null>(null);
   useEffect(() => { selectedUnderlyingRef.current = selectedUnderlying; }, [selectedUnderlying]);
   useEffect(() => { contractTypeRef.current = contractType; }, [contractType]);
   useEffect(() => { exchangeTabRef.current = exchangeTab; }, [exchangeTab]);
@@ -233,10 +232,11 @@ export default function Home() {
         setRealDate(msg.real_time.slice(0, 10));
         setTimeMap(prev => ({ ...prev, [Math.floor(msg.sim_time)]: timeStr }));
         setClosingPositions(new Set());
-        // Request a fresh size-adjusted quote for the selected contract every tick
+        // Request a fresh size-adjusted quote for the selected contract every tick.
+        // Always the execution panel's own selection — the Buy/Sell buttons trade
+        // exactly this contract, so they must never display another contract's prices.
         const suffix = exchangeTabRef.current === 1 ? "future" : contractTypeRef.current;
-        const selId = activeRfqContractIdRef.current
-          ?? (selectedUnderlyingRef.current ? `${selectedUnderlyingRef.current}_${suffix}` : null);
+        const selId = selectedUnderlyingRef.current ? `${selectedUnderlyingRef.current}_${suffix}` : null;
         if (selId && ws.readyState === 1) {
           ws.send(JSON.stringify({
             type: "quote_request",
@@ -247,8 +247,10 @@ export default function Home() {
       } else if (msg.type === "news") {
         setNews((prev) => [msg, ...prev]);
       } else if (msg.type === "quote") {
-        console.log("QUOTE RECEIVED", msg);
-        setQuote({ bid: msg.bid, ask: msg.ask });
+        // Ignore stale/mismatched responses (e.g. from just before a ticker switch)
+        const suffix = exchangeTabRef.current === 1 ? "future" : contractTypeRef.current;
+        const expected = selectedUnderlyingRef.current ? `${selectedUnderlyingRef.current}_${suffix}` : null;
+        if (msg.contract_id && msg.contract_id === expected) setQuote({ bid: msg.bid, ask: msg.ask });
       } else if (msg.type === "sim_complete") {
         simDone = true;
         setRunning(false);
@@ -374,6 +376,17 @@ export default function Home() {
     return contracts.find(c => c.underlying === selectedUnderlying && c.id.endsWith(`_${suffix}`));
   }, [contracts, selectedUnderlying, contractType, exchangeTab]);
 
+  // Not every underlying offers all four option strikes (worthless ones are dropped
+  // from the menu) — fall back to the first type that exists for this ticker.
+  useEffect(() => {
+    if (exchangeTab !== 0 || !selectedUnderlying || !contracts.length) return;
+    const has = (t: string) => contracts.some(c => c.underlying === selectedUnderlying && c.id.endsWith(`_${t}`));
+    if (!has(contractType)) {
+      const first = (["bullish", "bearish", "lottery", "hedge"] as const).find(has);
+      if (first) setContractType(first);
+    }
+  }, [contracts, selectedUnderlying, contractType, exchangeTab]);
+
   const [quote, setQuote] = useState<{ bid: number; ask: number }>({ bid: 0, ask: 0 });
 
   const bidAsk = quote;
@@ -401,10 +414,6 @@ export default function Home() {
     client_id: c.client_id, client_name: c.name, rfq: latestRfqByClient[c.client_id] || null,
   })), [clientRoster, latestRfqByClient]);
   useEffect(() => {
-    const rfq = deskRows.find((r: any) => r.client_id === selectedClientId)?.rfq;
-    activeRfqContractIdRef.current = rfq?.status === "open" ? rfq.contract_id : null;
-  }, [deskRows, selectedClientId]);
-  useEffect(() => {
     if (selectedClientId == null && deskRows.length) {
       const live = deskRows.find((r: any) => r.rfq?.status === "open");
       setSelectedClientId((live ?? deskRows[0]).client_id);
@@ -422,7 +431,7 @@ export default function Home() {
   const selectedRow = deskRows.find((r: any) => r.client_id === selectedClientId) || null;
   const statusLabel = (rfq: any) =>
     !rfq ? "no request"
-    : rfq.status === "open" ? (rfq.time_left != null ? `${Math.ceil(rfq.time_left)}s` : "live")
+    : rfq.status === "open" ? "live"
     : rfq.status === "filled" ? "done"
     : rfq.status === "rejected" ? "passed"
     : rfq.status === "expired" ? "not interested"
@@ -481,7 +490,7 @@ export default function Home() {
       <header className="h-14 flex items-center justify-between px-5 shrink-0 border-b border-tremor-border bg-gradient-to-b from-tremor-background to-tremor-background-muted">
         <div className="flex items-center gap-4 min-w-0">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(201,169,106,0.22)]">
+            <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(212,179,116,0.28)]">
               <div className="w-2 h-2 -rotate-45 rounded-full bg-tremor-brand"></div>
             </div>
             <div className="flex flex-col">
@@ -508,7 +517,7 @@ export default function Home() {
             </div>
           )}
           <div className="flex items-center gap-2.5">
-            <div className={`w-2 h-2 rounded-full ${running ? "bg-tremor-brand shadow-[0_0_10px_rgba(201,169,106,0.8)] animate-pulse-dot" : "bg-tremor-content-subtle/30"}`}></div>
+            <div className={`w-2 h-2 rounded-full ${running ? "bg-tremor-brand shadow-[0_0_10px_rgba(212,179,116,0.85)] animate-pulse-dot" : "bg-tremor-content-subtle/30"}`}></div>
             <span className="font-mono text-[22px] font-semibold tabular-nums tracking-tight text-tremor-content-strong">{mm}:{ss}</span>
           </div>
           <button
@@ -517,7 +526,7 @@ export default function Home() {
             className={`h-9 px-4 rounded-md text-[12px] font-bold uppercase tracking-[0.1em] transition-all ${
               running
                 ? "bg-tremor-background-emphasis text-tremor-content-subtle cursor-default"
-                : "bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis shadow-[0_0_20px_rgba(201,169,106,0.25)] cursor-pointer"
+                : "bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis shadow-[0_0_20px_rgba(212,179,116,0.3)] cursor-pointer"
             }`}
           >
             {running ? "In Progress" : "Start Sim"}
@@ -550,7 +559,7 @@ export default function Home() {
                   <div
                     key={t + iter}
                     onClick={() => setSelectedUnderlying(t)}
-                    className={`flex items-center gap-2 px-4 h-10 cursor-pointer transition-colors border-r border-tremor-border/60 ${isSel ? "bg-tremor-brand/[0.08] shadow-[inset_0_-2px_0_0_#C9A96A]" : "hover:bg-white/[0.03]"}`}
+                    className={`flex items-center gap-2 px-4 h-10 cursor-pointer transition-colors border-r border-tremor-border/60 ${isSel ? "bg-tremor-brand/[0.08] shadow-[inset_0_-2px_0_0_#D4B374]" : "hover:bg-white/[0.03]"}`}
                   >
                     <span className={`font-bold text-[11px] tracking-wide ${isSel ? "text-tremor-brand" : "text-tremor-content"}`}>{shortTicker(t)}</span>
                     <span className="font-mono text-[12px] text-tremor-content-emphasis tabular-nums">{fmtPx(px)}</span>
@@ -567,7 +576,7 @@ export default function Home() {
 
       {/* ── KPI STRIP ── */}
       <div className="h-[70px] shrink-0 px-2 pt-2">
-        <div className="h-full grid grid-cols-6 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background">
+        <div className="h-full grid grid-cols-6 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_28px_-14px_rgba(0,0,0,0.6)]">
           <Stat label="Total P&L" value={fmtMoney(portfolio?.total_pnl ?? 0)} delta={portfolio?.total_pnl} emphasis />
           <Stat label="Realised P&L" value={fmtMoney(portfolio?.closed_pnl ?? 0)} delta={portfolio?.closed_pnl} />
           <Stat label="Unrealised P&L" value={fmtMoney(portfolio?.unrealised_pnl ?? 0)} delta={portfolio?.unrealised_pnl} />
@@ -662,7 +671,7 @@ export default function Home() {
                 </div>
               ) : (
                 filteredNews.map((n, i) => {
-                  const hex = NEWS_HEX[n.category] || "#94A0B8";
+                  const hex = NEWS_HEX[n.category] || "#9CACCB";
                   return (
                     <div key={i} className="relative px-3 py-2 border-b border-tremor-border/40 animate-fade-in hover:bg-white/[0.02] group/head">
                       <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ backgroundColor: hex }}></div>
@@ -855,6 +864,7 @@ export default function Home() {
                   <div className="grid grid-cols-2 gap-1.5">
                     {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
                       const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
+                      if (!c) return null;  // strike not offered for this underlying (worthless premium)
                       const isSel = contractType === type;
                       const name = OPTION_NAMES[type];
                       return (
@@ -1104,7 +1114,7 @@ function Briefing({ startSim }: { startSim: () => void }) {
       {/* champagne wash */}
       <div
         className="absolute inset-0 pointer-events-none"
-        style={{ background: "radial-gradient(ellipse 55% 50% at 50% 40%, rgba(201,169,106,0.08), transparent 70%)" }}
+        style={{ background: "radial-gradient(ellipse 55% 50% at 50% 40%, rgba(212,179,116,0.09), transparent 70%)" }}
       />
 
       <span className="relative font-mono text-[12px] tracking-[0.3em] text-tremor-brand animate-rise">
@@ -1151,7 +1161,7 @@ function Briefing({ startSim }: { startSim: () => void }) {
 
       <button
         onClick={startSim}
-        className="relative font-mono text-[14px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-7 py-3 bg-tremor-brand/[0.06] transition-all duration-300 hover:bg-tremor-brand hover:text-tremor-brand-inverted hover:shadow-[0_0_32px_rgba(201,169,106,0.35)] cursor-pointer animate-rise"
+        className="relative font-mono text-[14px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-7 py-3 bg-tremor-brand/[0.06] transition-all duration-300 hover:bg-tremor-brand hover:text-tremor-brand-inverted hover:shadow-[0_0_32px_rgba(212,179,116,0.4)] cursor-pointer animate-rise"
         style={{ animationDelay: "420ms" }}
       >
         [ START SESSION {"→"} ]
@@ -1174,7 +1184,7 @@ function Panel({ title, headerExtra, className = "", children }: {
   title: string; headerExtra?: React.ReactNode; className?: string; children: React.ReactNode;
 }) {
   return (
-    <section className={`bg-tremor-background border border-tremor-border rounded-lg flex flex-col overflow-hidden min-h-0 ${className}`}>
+    <section className={`bg-tremor-background border border-tremor-border rounded-lg flex flex-col overflow-hidden min-h-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_28px_-14px_rgba(0,0,0,0.6)] ${className}`}>
       <div className="h-10 flex items-center justify-between pl-3 pr-2 border-b border-tremor-border shrink-0 bg-tremor-background-subtle/40">
         <div className="flex items-center gap-2">
           <span className="w-[3px] h-3.5 rounded-full bg-tremor-brand/80"></span>
@@ -1188,7 +1198,7 @@ function Panel({ title, headerExtra, className = "", children }: {
 }
 
 function ClassChip({ type }: { type: string }) {
-  const hex = ASSET_HEX[type] || "#94A0B8";
+  const hex = ASSET_HEX[type] || "#9CACCB";
   return (
     <span
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider"

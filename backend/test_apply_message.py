@@ -15,7 +15,8 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).parent))
 import clients
 
-rfq = clients.seed_rfqs()[0]   # vortex, buy 50 ASML.AS_bullish, deadline 120
+rfq = clients.seed_rfqs(["ASML.AS_bullish"])[0]   # vortex
+rfq.deadline_sec = 120.0   # pin the random window so the +30 assert is deterministic
 now = 10.0
 print(f"before: deadline={rfq.deadline_sec}  extended={rfq.extended}  status={rfq.status}")
 

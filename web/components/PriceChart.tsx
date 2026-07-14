@@ -32,7 +32,7 @@ export default function PriceChart({
   const dp = Math.max(magDp, Math.min(6, Math.max(0, Math.ceil(-Math.log10(span / 5)))));
 
   const axisLabelStyle = {
-    colors: "#55617A", fontSize: "11px",
+    colors: "#5E6D8F", fontSize: "11px",
     fontFamily: "var(--font-jetbrains-mono), ui-monospace, monospace",
   };
 
@@ -51,7 +51,7 @@ export default function PriceChart({
     fill: mode === "area"
       ? { type: "gradient", gradient: { shadeIntensity: 1, opacityFrom: 0.22, opacityTo: 0.0, stops: [0, 100] } }
       : { type: "solid", opacity: 1 },
-    grid: { borderColor: "#1C2536", strokeDashArray: 4, xaxis: { lines: { show: false } }, padding: { left: 10, right: 14, top: 6, bottom: 0 } },
+    grid: { borderColor: "#24314E", strokeDashArray: 4, xaxis: { lines: { show: false } }, padding: { left: 10, right: 14, top: 6, bottom: 0 } },
     dataLabels: { enabled: false },
     markers: { size: 0, hover: { size: 4, strokeWidth: 2 } },
     xaxis: {
@@ -61,7 +61,7 @@ export default function PriceChart({
         rotate: 0, hideOverlappingLabels: true, showDuplicates: false,
         formatter: (val: string) => timeMap[Number(val)] ?? String(val),
       },
-      axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, crosshairs: { show: true, stroke: { color: "rgba(201,169,106,0.35)", dashArray: 3 } },
+      axisBorder: { show: false }, axisTicks: { show: false }, tooltip: { enabled: false }, crosshairs: { show: true, stroke: { color: "rgba(212,179,116,0.4)", dashArray: 3 } },
     },
     yaxis: {
       min: lo - pad, max: hi + pad, tickAmount: 5,

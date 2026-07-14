@@ -4,6 +4,7 @@ Slice 3: tolerance (urgency widens, annoyance shrinks), messaging, canned replie
 """
 
 import os
+import math
 import random
 import json
 import itertools
@@ -87,6 +88,7 @@ class RFQ:
     status: str = "open"
     counter_px: float = 0.0      # level the client countered at (0 = none)
     counter_rounds: int = 0      # counters used; client walks after MAX_COUNTER_ROUNDS
+    counter_qty: int = 0         # size the client countered at (0 = no size counter outstanding)
 
     def annoyance(self, now: float) -> float:
         """0..1 — climbs with unanswered time. Medium: ~full by halfway through a silent span."""
@@ -127,9 +129,11 @@ def seed_rfqs(contract_ids: list[str]) -> list[RFQ]:
 
 
 def maybe_spawn_rfq(rfqs: list[RFQ], now: float, contract_ids: list[str],
-                    max_open: int = 8, rate: float = 0.05, quiet_secs: float = 45.0) -> RFQ | None:
+                    max_open: int = 8, rate: float = 0.05, quiet_secs: float = 150.0) -> RFQ | None:
     """Occasionally hand a new RFQ to an idle client. Skips clients with recent
-    chat activity so a conversation you are in does not get a new request mid-flow."""
+    chat activity so a conversation you are in does not get a new request mid-flow.
+    Every RFQ close posts a client message, so quiet_secs also acts as a cooldown
+    between a client's request ending and them coming back with a new one."""
     open_clients = {r.client_id for r in rfqs if r.status == "open"}
     if len(open_clients) >= max_open or random.random() > rate:
         return None
@@ -145,7 +149,8 @@ def maybe_spawn_rfq(rfqs: list[RFQ], now: float, contract_ids: list[str],
 
 
 def expire_rfqs(rfqs: list[RFQ], now: float) -> None:
-    """Mark still-open RFQs past their deadline as expired."""
+    """Mark still-open RFQs past their deadline as expired.
+    No longer called by the server (timer trial) — kept for easy revert."""
     for r in rfqs:
         if r.status == "open" and now >= r.deadline_sec:
             r.status = "expired"
@@ -396,12 +401,27 @@ BORDERLINE_FACTOR  = 1.60   # up to 1.60x T: reduced size
 PARTIAL_FRACTION   = 0.5    # reduced size = half, floor, min 1
 MAX_COUNTER_ROUNDS = 2      # client counters at most twice, then walks
 
+QTY_BAND_LO          = 0.5   # entertain quotes down to 50% of requested size
+QTY_BAND_HI          = 1.2   # over-quotes up to 120% fine; client fills only their size
+QTY_ACCEPT_SHORTFALL = 0.2   # at a merely-OK price, accepts up to 20% under size without fuss
+
+
+def qty_in_band(requested: int, quoted: int) -> bool:
+    """A quoted size the client will entertain rather than auto-reject."""
+    return quoted > 0 and requested * QTY_BAND_LO <= quoted <= requested * QTY_BAND_HI
+
 
 def _tiered_decision(side: str, your_bid: float, your_ask: float,
-                     mid: float, threshold: float, qty: int):
+                     mid: float, threshold: float, qty: int,
+                     offered_qty: int | None = None, floor_qty: int = 0):
     """side is the CLIENT's action. Returns (traded, dealer_qty, price, action).
     price is the fill price on fills, the client's counter level on "counter".
+    On "counter_qty" the second slot carries the client's compromise size.
+    offered_qty is the size the dealer quoted (None = the requested size);
+    floor_qty is a size the client already agreed to accept via a size counter.
     Compared in price space (px vs mid*(1±k*T)) so exact boundaries fill."""
+    offer = qty if offered_qty is None else min(offered_qty, qty)
+    short = offer < qty
     if side == "buy":
         px, sign, verb = your_ask, -1, "lifted"
         within = lambda k: px <= mid * (1 + k * threshold)
@@ -411,29 +431,39 @@ def _tiered_decision(side: str, your_bid: float, your_ask: float,
         within = lambda k: px >= mid * (1 - k * threshold)
         counter_px = mid * (1 - CLOSE_FACTOR * threshold)
     if within(1.0):
-        return (True, sign * qty, px, verb)
+        return (True, sign * offer, px, verb + ("_short" if short else ""))
     if within(CLOSE_FACTOR):
-        return (True, sign * qty, px, verb + "_close")
+        if not short:
+            return (True, sign * qty, px, verb + "_close")
+        min_ok = floor_qty if floor_qty > 0 else math.ceil(qty * (1 - QTY_ACCEPT_SHORTFALL))
+        if offer >= min_ok:
+            return (True, sign * offer, px, verb + "_short")
+        compromise = max(offer + 1, (offer + qty + 1) // 2)
+        return (False, compromise, px, "counter_qty")
     if within(BORDERLINE_FACTOR):
-        fill_qty = max(1, int(qty * PARTIAL_FRACTION))
+        fill_qty = min(offer, max(1, int(qty * PARTIAL_FRACTION)))
         return (True, sign * fill_qty, px, verb + "_partial")
     return (False, 0, counter_px, "counter")
 
 
-def evaluate_two_way(rfq: RFQ, your_bid: float, your_ask: float, mid: float, now: float):
+def evaluate_two_way(rfq: RFQ, your_bid: float, your_ask: float, mid: float, now: float,
+                     offered_qty: int | None = None):
     """
     Market-making: client wants a two-way market; their true side is hidden in rfq.side.
     Returns (traded, dealer_qty, price, action):
       client buys  -> lifts your ask -> you sell (dealer short, -qty) at your ask
       client sells -> hits your bid  -> you buy  (dealer long,  +qty) at your bid
     action in {"invalid", "lifted", "hit", "lifted_close", "hit_close",
-    "lifted_partial", "hit_partial", "counter"}; on "counter" price is the level
-    the client wants. Caller owns counter-round state.
+    "lifted_short", "hit_short", "lifted_partial", "hit_partial",
+    "counter", "counter_qty"}; on "counter" price is the level the client wants,
+    on "counter_qty" dealer_qty is the size the client will settle for.
+    Caller owns counter-round state.
     """
     if your_bid <= 0 or your_ask <= 0 or your_bid >= your_ask:
         return (False, 0, 0.0, "invalid")
     tol = rfq.effective_tolerance(now)
-    return _tiered_decision(rfq.side, your_bid, your_ask, mid, tol, rfq.quantity)
+    return _tiered_decision(rfq.side, your_bid, your_ask, mid, tol, rfq.quantity,
+                            offered_qty=offered_qty, floor_qty=rfq.counter_qty)
 
 def evaluate_unsolicited(client: Client, contract_id: str, your_bid: float,
                          your_ask: float, mid: float, qty: int):

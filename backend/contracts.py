@@ -77,12 +77,18 @@ def _fmt_strike(ticker: str, strike: float) -> str:
     return f"{strike:.2f}"
 
 
+# Options whose fair value is essentially zero (deep OTM at low vol — think a
+# 10%-away FX strike at 8% IV) are unquotable: mid ~ 0 makes every bid/ask 0 and
+# breaks the RFQ tolerance bands. Skip them at menu build time.
+MIN_PREMIUM_RATIO = 1e-4   # keep options worth at least 0.01% of spot
+
+
 def build_menu(initial_spots: dict[str, float]) -> list[Contract]:
-    """Build the 60-contract menu from initial spot prices."""
+    """Build the contract menu (up to 5 per underlying) from initial spot prices."""
     contracts: list[Contract] = []
     for ticker, spot in initial_spots.items():
         iv = DEFAULT_IV.get(ticker, 0.25)
-        
+
         # Options
         kinds = [
             ("bullish", "call", spot * 1.02, "ATM Call"),
@@ -90,8 +96,11 @@ def build_menu(initial_spots: dict[str, float]) -> list[Contract]:
             ("lottery", "call", spot * 1.10, "OTM Call"),
             ("hedge",   "put",  spot * 0.90, "OTM Put"),
         ]
-        
+
         for suffix, otype, strike, sub in kinds:
+            premium = black_scholes(spot, strike, T_YEARS, R, iv, otype)
+            if premium < spot * MIN_PREMIUM_RATIO:
+                continue
             label = f"{ticker} 1M {'Call' if otype == 'call' else 'Put'} @ {_fmt_strike(ticker, strike)}"
             contracts.append(Contract(
                 f"{ticker}_{suffix}", ticker, label, sub, otype, strike, iv
