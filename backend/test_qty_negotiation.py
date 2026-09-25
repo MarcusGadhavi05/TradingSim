@@ -3,7 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import clients
 
-c = clients.CLIENTS["vortex"]
+c = clients.CLIENTS["harrow"]
 def mk(side, qty=100, counter_qty=0):
     r = clients.RFQ("rfq_x", c.client_id, c.name, "ASML.AS_bullish", side, qty,
                     0.0, 120.0, c.base_tolerance, c.urgency_ramp)
@@ -12,7 +12,7 @@ def mk(side, qty=100, counter_qty=0):
 
 mid, now = 100.0, 0.0
 tol = mk("buy").effective_tolerance(now)
-# vortex at t=0: T = 0.018 -> tight ask <= 101.8, close <= 102.25, borderline <= 102.88
+# harrow at t=0: T = 0.018 -> tight ask <= 101.8, close <= 102.25, borderline <= 102.88
 print(f"tol={tol:.4f} -> tight <= {mid*(1+tol):.3f}, close <= {mid*(1+clients.CLOSE_FACTOR*tol):.3f}, "
       f"borderline <= {mid*(1+clients.BORDERLINE_FACTOR*tol):.3f}")
 

@@ -14,7 +14,7 @@ clean and the numbers human-readable.
 
 from dataclasses import dataclass, field
 from typing import Iterable
-from contracts import Contract, price_contract
+from contracts import Contract, price_contract, contract_greeks
 
 
 CONTRACT_SIZE = {
@@ -36,7 +36,7 @@ class Position:
 
 @dataclass
 class Portfolio:
-    cash: float = 100_000.0
+    cash: float = 10_000_000.0
     positions: list[Position] = field(default_factory=list)
     closed_pnl: float = 0.0     # realised P&L from closed trades
 
@@ -88,18 +88,40 @@ class Portfolio:
         return f"Opened position {contract.contract_id}: {quantity} @ {current_premium:.4f}"
 
     def mark_to_market(self, contracts: Iterable[Contract],
-                       spots: dict[str, float]) -> dict:
-        """Compute unrealised P&L given current spot prices."""
+                       spots: dict[str, float], t: float | None = None) -> dict:
+        """Compute unrealised P&L given current spot prices. `t` is the
+        remaining time to expiry in years (see contracts.price_contract) —
+        pass the session's live clock so unrealised P&L reflects theta decay,
+        not just delta from spot moves."""
         contracts_by_id = {c.contract_id: c for c in contracts}
         unrealised = 0.0
+        net_delta = net_gamma = net_vega = net_theta = 0.0
         breakdown = []
         for pos in self.positions:
             c = contracts_by_id[pos.contract_id]
             spot = spots[c.underlying]
-            current_px = price_contract(c, spot)
+            current_px = price_contract(c, spot, t)
             size = CONTRACT_SIZE.get(c.underlying, 1)
             pnl = pos.quantity * (current_px - pos.entry_price) * size
             unrealised += pnl
+
+            # Position Greeks, scaled to this desk's actual size (quantity *
+            # contract size) so they read as risk you'd manage, not per-unit
+            # textbook values. Delta/gamma stay in underlying-equivalent units
+            # (e.g. "+5,000 deltas" = same spot exposure as 5,000 shares);
+            # vega/theta are dollars, since a vol point or a day isn't a
+            # "quantity" you'd otherwise net against.
+            g = contract_greeks(c, spot, t)
+            scale = pos.quantity * size
+            pos_delta = g["delta"] * scale
+            pos_gamma = g["gamma"] * scale
+            pos_vega  = g["vega"]  * scale
+            pos_theta = g["theta"] * scale
+            net_delta += pos_delta
+            net_gamma += pos_gamma
+            net_vega  += pos_vega
+            net_theta += pos_theta
+
             breakdown.append({
                 "contract_id": pos.contract_id,
                 "label": c.label,
@@ -108,6 +130,10 @@ class Portfolio:
                 "current": current_px,
                 "pnl": pnl,
                 "type": c.option_type,
+                "delta": pos_delta,
+                "gamma": pos_gamma,
+                "vega": pos_vega,
+                "theta": pos_theta,
             })
         return {
             "cash": self.cash,
@@ -116,4 +142,8 @@ class Portfolio:
             "total_pnl": self.closed_pnl + unrealised,
             "equity": self.cash + unrealised,
             "positions": breakdown,
+            "net_delta": net_delta,
+            "net_gamma": net_gamma,
+            "net_vega": net_vega,
+            "net_theta": net_theta,
         }

@@ -37,13 +37,13 @@ def run(client_id: str, annoyance: float):
             annoyance=annoyance,
         )
         print(f"  you : {msg}")
-        print(f"  <-  : intent={out['intent']!r}  reply={out['reply']!r}")
+        print(f"  <-  : reply={out['reply']!r}")
 
 
 if __name__ == "__main__":
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("WARNING: no ANTHROPIC_API_KEY — using keyword + template fallback.")
-    for cid in ("vortex", "monarch"):
+    for cid in ("harrow", "monarch"):
         run(cid, annoyance=0.0)
-    run("vortex", annoyance=0.8)
+    run("harrow", annoyance=0.8)
     run("monarch", annoyance=0.8)

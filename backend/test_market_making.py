@@ -3,7 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import clients
 
-c = clients.CLIENTS["vortex"]
+c = clients.CLIENTS["harrow"]
 def mk(side):
     return clients.RFQ("rfq_x", c.client_id, c.name, "ASML.AS_bullish", side, 50,
                        0.0, 120.0, c.base_tolerance, c.urgency_ramp)

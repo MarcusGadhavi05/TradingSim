@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
+import { motion, AnimatePresence, useSpring, useMotionValueEvent } from "framer-motion";
 import {
   Badge,
   Table,
@@ -15,7 +16,14 @@ import {
   Tab,
   Button,
 } from "@tremor/react";
+import {
+  X, Trash2, Send, Play, Loader2, Search,
+  ArrowUpRight, ArrowDownRight,
+  ListOrdered, Newspaper, LineChart, Briefcase, Zap, MessagesSquare,
+} from "lucide-react";
 import PriceChart from "../../components/PriceChart";
+import Splash from "../../components/Splash";
+import Logo from "../../components/Logo";
 
 // --- Types & Constants ---
 
@@ -28,6 +36,10 @@ type Contract = {
   premium: number;
   underlying: string;
   spot: number;
+  delta: number;
+  gamma: number;
+  vega: number;
+  theta: number;
 };
 
 type Position = {
@@ -38,6 +50,10 @@ type Position = {
   current: number;
   pnl: number;
   type?: string;
+  delta: number;
+  gamma: number;
+  vega: number;
+  theta: number;
 };
 
 type Portfolio = {
@@ -47,6 +63,10 @@ type Portfolio = {
   total_pnl: number;
   equity: number;
   positions: Position[];
+  net_delta: number;
+  net_gamma: number;
+  net_vega: number;
+  net_theta: number;
 };
 
 type NewsItem = {
@@ -87,20 +107,24 @@ const CATEGORY_MAP: Record<string, string> = {
   "macro": "MACRO", "uk": "UK", "us": "US", "eu": "EU",
 };
 
+// "bullish"/"bearish"/"lottery"/"hedge" are internal contract_id suffixes only
+// (see backend/contracts.py) — never shown to the trader raw. Every place
+// that surfaces a contract's kind maps through here to the standard ATM/OTM
+// call/put terminology instead.
 const OPTION_NAMES: Record<string, { heading: string; sub: string }> = {
   "bullish": { heading: "ATM CALL", sub: "Near-the-money call" },
   "bearish": { heading: "ATM PUT", sub: "Near-the-money put" },
   "lottery": { heading: "OTM CALL", sub: "Out-of-the-money call" },
   "hedge":   { heading: "OTM PUT", sub: "Out-of-the-money put" },
+  "future":  { heading: "FUTURE", sub: "1-month future" },
 };
 
 const BACKEND_WS = process.env.NEXT_PUBLIC_BACKEND_WS_URL || "ws://127.0.0.1:8000/ws";
 const BACKEND_HTTP = BACKEND_WS.replace(/^ws/, "http").replace(/\/ws$/, "");
 
-// --- Icons ---
-const XIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-);
+// Mirrors backend MAX_ORDER_QTY — the backend is the authoritative guard,
+// this is just so the UI doesn't invite an absurd entry in the first place.
+const MAX_ORDER_QTY = 20_000;
 
 // --- Helpers ---
 
@@ -123,6 +147,7 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const [running, setRunning] = useState(false);
   const [started, setStarted] = useState(false); // stays true once the first session begins
+  const [showSplash, setShowSplash] = useState(false);
   const [waking, setWaking] = useState(false);
   const [simDuration, setSimDuration] = useState(3600);
   const [simTime, setSimTime] = useState(0);
@@ -130,10 +155,12 @@ export default function Home() {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [history, setHistory] = useState<Record<string, { t: number; px: number }[]>>({});
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [selectedUnderlying, setSelectedUnderlying] = useState<string | null>(null);
   const [tradeQty, setTradeQty] = useState<number | "">("");
   const [exchangeTab, setExchangeTab] = useState<number>(0); // 0: Options, 1: Futures
+  const [portfolioTab, setPortfolioTab] = useState<number>(0); // 0: Positions, 1: Greeks
   const [contractType, setContractType] = useState<string>("bullish");
   const [realDate, setRealDate] = useState<string>("");
   const [timeMap, setTimeMap] = useState<Record<number, string>>({});
@@ -204,6 +231,7 @@ export default function Home() {
   const startSim = useCallback(() => {
     setStarted(true);
     setRunning(true);
+    setShowSplash(true);
     setNews([]);
     setTimeMap({});
     let simDone = false;   // set on sim_complete — a finished sim must not auto-reconnect
@@ -256,6 +284,9 @@ export default function Home() {
         setRunning(false);
       } else if (msg.type === "client_result") {
         setClientMsg(msg.message);
+      } else if (msg.type === "error") {
+        setOrderError(msg.message);
+        setTimeout(() => setOrderError(null), 5000);
       }
     };
     ws.onclose = () => {
@@ -453,7 +484,7 @@ export default function Home() {
       const rfq = rfqs.find((r: any) => r.rfq_id === rfqId);
       const realTkr = rfq ? shortTicker(String(rfq.contract_id).split("_")[0]) : "";
       const quoted_ticker = quoteTickers[rfqId] ?? realTkr;
-      const quoted_qty = parseInt(quoteQtys[rfqId] || String(rfq?.quantity ?? 1), 10);
+      const quoted_qty = Math.min(MAX_ORDER_QTY, parseInt(quoteQtys[rfqId] || String(rfq?.quantity ?? 1), 10));
       wsRef.current.send(JSON.stringify({
         type: "client_quote", rfq_id: rfqId, bid, ask, quoted_ticker, quoted_qty,
       }));
@@ -462,7 +493,7 @@ export default function Home() {
   const sendUnsolicitedQuote = (clientId: string) => {
     const key = `unsol_${clientId}`;
     const ticker = (quoteTickers[key] ?? "").trim();
-    const qty = parseInt(quoteQtys[key] || "", 10);
+    const qty = Math.min(MAX_ORDER_QTY, parseInt(quoteQtys[key] || "", 10));
     const bid = parseFloat(quoteBids[key] || "0");
     const ask = parseFloat(quoteAsks[key] || "0");
     if (!ticker || !Number.isFinite(qty) || qty <= 0 || !(bid > 0) || !(ask > 0)) return;
@@ -487,23 +518,16 @@ export default function Home() {
     >
 
       {/* ── TOP BAR: identity · session date · clock · start ── */}
-      <header className="h-14 flex items-center justify-between px-5 shrink-0 border-b border-tremor-border bg-gradient-to-b from-tremor-background to-tremor-background-muted">
+      <header className="h-12 flex items-center justify-between px-5 shrink-0 border-b border-tremor-border bg-gradient-to-b from-tremor-background to-tremor-background-muted">
         <div className="flex items-center gap-4 min-w-0">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rotate-45 rounded-[4px] border border-tremor-brand/60 bg-tremor-brand/10 flex items-center justify-center shadow-[0_0_18px_rgba(212,179,116,0.28)]">
-              <div className="w-2 h-2 -rotate-45 rounded-full bg-tremor-brand"></div>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-[14px] font-bold tracking-[0.28em] text-tremor-content-strong leading-none">DERIVATIVES&nbsp;DESK</span>
-              <span className="text-[10px] uppercase tracking-[0.18em] text-tremor-content-subtle mt-1">Multi-Asset Simulation</span>
-            </div>
-          </div>
+          <Logo size="sm" suffix="DERIVATIVES DESK" />
           <div className="w-px h-8 bg-tremor-border"></div>
           <span className="text-[11px] text-tremor-content-subtle whitespace-nowrap">
-            March – May 2025 <span className="mx-1 text-tremor-border">|</span> {"£"}100,000 starting capital
+            March – May 2025 <span className="mx-1 text-tremor-border">|</span> {"£"}10,000,000 starting capital
           </span>
           {waking && (
-            <span className="text-[10px] uppercase tracking-wider font-bold text-tremor-brand/80 bg-tremor-brand/10 border border-tremor-brand/20 rounded-full px-2.5 py-1 animate-pulse-dot">
+            <span className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-bold text-tremor-brand/80 bg-tremor-brand/10 border border-tremor-brand/20 rounded-full px-2.5 py-1">
+              <Loader2 size={11} className="animate-spin" />
               Waking backend{"…"}
             </span>
           )}
@@ -520,17 +544,20 @@ export default function Home() {
             <div className={`w-2 h-2 rounded-full ${running ? "bg-tremor-brand shadow-[0_0_10px_rgba(212,179,116,0.85)] animate-pulse-dot" : "bg-tremor-content-subtle/30"}`}></div>
             <span className="font-mono text-[22px] font-semibold tabular-nums tracking-tight text-tremor-content-strong">{mm}:{ss}</span>
           </div>
-          <button
+          <motion.button
+            whileHover={running ? undefined : { scale: 1.03 }}
+            whileTap={running ? undefined : { scale: 0.97 }}
             onClick={startSim}
             disabled={running}
-            className={`h-9 px-4 rounded-md text-[12px] font-bold uppercase tracking-[0.1em] transition-all ${
+            className={`inline-flex items-center gap-1.5 h-9 px-4 rounded-md text-[12px] font-bold uppercase tracking-[0.1em] transition-all ${
               running
                 ? "bg-tremor-background-emphasis text-tremor-content-subtle cursor-default"
                 : "bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis shadow-[0_0_20px_rgba(212,179,116,0.3)] cursor-pointer"
             }`}
           >
+            {!running && <Play size={12} fill="currentColor" />}
             {running ? "In Progress" : "Start Sim"}
-          </button>
+          </motion.button>
         </div>
       </header>
 
@@ -575,14 +602,14 @@ export default function Home() {
       </div>
 
       {/* ── KPI STRIP ── */}
-      <div className="h-[70px] shrink-0 px-2 pt-2">
+      <div className="h-[58px] shrink-0 px-2 pt-2">
         <div className="h-full grid grid-cols-6 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_28px_-14px_rgba(0,0,0,0.6)]">
-          <Stat label="Total P&L" value={fmtMoney(portfolio?.total_pnl ?? 0)} delta={portfolio?.total_pnl} emphasis />
-          <Stat label="Realised P&L" value={fmtMoney(portfolio?.closed_pnl ?? 0)} delta={portfolio?.closed_pnl} />
-          <Stat label="Unrealised P&L" value={fmtMoney(portfolio?.unrealised_pnl ?? 0)} delta={portfolio?.unrealised_pnl} />
-          <Stat label="Available Cash" value={fmtMoney(portfolio?.cash ?? 100000)} />
-          <Stat label="Net Exposure" value={fmtMoney(netExposure)} />
-          <Stat label="Contracts Held" value={fmt(sharesOwned, 0)} />
+          <Stat label="Total P&L" rawValue={portfolio?.total_pnl ?? 0} format={fmtMoney} delta={portfolio?.total_pnl} emphasis />
+          <Stat label="Realised P&L" rawValue={portfolio?.closed_pnl ?? 0} format={fmtMoney} delta={portfolio?.closed_pnl} />
+          <Stat label="Unrealised P&L" rawValue={portfolio?.unrealised_pnl ?? 0} format={fmtMoney} delta={portfolio?.unrealised_pnl} />
+          <Stat label="Available Cash" rawValue={portfolio?.cash ?? 10000000} format={fmtMoney} />
+          <Stat label="Net Exposure" rawValue={netExposure} format={fmtMoney} />
+          <Stat label="Contracts Held" rawValue={sharesOwned} format={(n) => fmt(n, 0)} />
         </div>
       </div>
 
@@ -593,7 +620,7 @@ export default function Home() {
         <div className="flex flex-col gap-2 min-h-0 min-w-0">
 
           {/* WATCHLIST */}
-          <Panel title="Watchlist" className="flex-[11]" headerExtra={
+          <Panel title="Watchlist" icon={ListOrdered} style={{ flex: "11 1 0%" }} headerExtra={
             <TabGroup
               index={assetCategories.indexOf(selectedAssetTab)}
               onIndexChange={(i) => setSelectedAssetTab(assetCategories[i])}
@@ -611,7 +638,7 @@ export default function Home() {
               <Table>
                 <TableHead className="sticky top-0 bg-tremor-background z-10">
                   <TableRow className="border-b border-tremor-border">
-                    {["Ticker", "Ref Price", "% Chg", "Type"].map(col => (
+                    {["Ticker", "Ref Price", "% Chg"].map(col => (
                       <TableHeaderCell
                         key={col}
                         onClick={() => setAssetSort({ col, dir: assetSort.col === col ? (assetSort.dir === 1 ? -1 : 1) : 1 })}
@@ -625,10 +652,24 @@ export default function Home() {
                         </span>
                       </TableHeaderCell>
                     ))}
+                    <TableHeaderCell className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle">Trend</TableHeaderCell>
+                    <TableHeaderCell
+                      onClick={() => setAssetSort({ col: "Type", dir: assetSort.col === "Type" ? (assetSort.dir === 1 ? -1 : 1) : 1 })}
+                      className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle cursor-pointer hover:text-tremor-content transition-colors"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        Type
+                        <span className={`text-[9px] ${assetSort.col === "Type" ? "text-tremor-brand opacity-100" : "opacity-30"}`}>
+                          {assetSort.col === "Type" ? (assetSort.dir === 1 ? "▴" : "▾") : "↕"}
+                        </span>
+                      </span>
+                    </TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredAssets.map(a => (
+                  {filteredAssets.map(a => {
+                    const sparkData = (history[a.ticker] || []).slice(-30).map(d => d.px);
+                    return (
                     <TableRow
                       key={a.ticker}
                       onClick={() => setSelectedUnderlying(a.ticker)}
@@ -644,25 +685,31 @@ export default function Home() {
                           {a.chg >= 0 ? "▴" : "▾"} {Math.abs(a.chg).toFixed(2)}%
                         </span>
                       </TableCell>
+                      <TableCell className="px-2 py-2">
+                        <Sparkline data={sparkData} color={a.chg >= 0 ? GAIN : LOSS} />
+                      </TableCell>
                       <TableCell className="px-3 py-2">
                         <ClassChip type={a.type} />
                       </TableCell>
                     </TableRow>
-                  ))}
+                  );})}
                 </TableBody>
               </Table>
             </div>
           </Panel>
 
           {/* NEWS */}
-          <Panel title="Market Intelligence" className="flex-[8]" headerExtra={
-            <input
-              type="text"
-              placeholder="Search news…"
-              value={newsSearch}
-              onChange={e => setNewsSearch(e.target.value)}
-              className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[11px] w-44 outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors"
-            />
+          <Panel title="Market Intelligence" icon={Newspaper} style={{ flex: "8 1 0%" }} headerExtra={
+            <div className="relative">
+              <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search news…"
+                value={newsSearch}
+                onChange={e => setNewsSearch(e.target.value)}
+                className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 pl-6 pr-2 text-[11px] w-44 outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors"
+              />
+            </div>
           }>
             <div className="flex-1 min-h-0 overflow-y-auto">
               {filteredNews.length === 0 ? (
@@ -670,27 +717,37 @@ export default function Home() {
                   {news.length === 0 ? "Headlines will appear as the session progresses." : "No news matching filters."}
                 </div>
               ) : (
-                filteredNews.map((n, i) => {
-                  const hex = NEWS_HEX[n.category] || "#9CACCB";
-                  return (
-                    <div key={i} className="relative px-3 py-2 border-b border-tremor-border/40 animate-fade-in hover:bg-white/[0.02] group/head">
-                      <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ backgroundColor: hex }}></div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span
-                          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded"
-                          style={{ color: hex, backgroundColor: hex + "1A" }}
-                        >
-                          {CATEGORY_MAP[n.category] || n.category.toUpperCase()}
-                        </span>
-                        <span className="font-mono text-[10px] text-tremor-content-subtle tabular-nums">{n.real_time.slice(0, 16).replace("T", " ")}</span>
-                      </div>
-                      <div className="text-[12px] leading-snug font-medium text-tremor-content-emphasis">{n.headline}</div>
-                      <div className="invisible group-hover/head:visible absolute top-full left-3 z-50 bg-tremor-background-emphasis text-tremor-content-emphasis text-[11px] leading-snug p-2 rounded-md shadow-xl border border-tremor-brand/25 max-w-xs -mt-1">
-                        {n.impact_hint}
-                      </div>
-                    </div>
-                  );
-                })
+                <AnimatePresence initial={false}>
+                  {filteredNews.map((n) => {
+                    const hex = NEWS_HEX[n.category] || "#9CACCB";
+                    return (
+                      <motion.div
+                        key={`${n.sim_time}-${n.headline}`}
+                        layout
+                        initial={{ opacity: 0, y: -8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.28, ease: "easeOut" }}
+                        className="relative px-3 py-2 border-b border-tremor-border/40 hover:bg-white/[0.02] group/head overflow-hidden"
+                      >
+                        <div className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r" style={{ backgroundColor: hex }}></div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span
+                            className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-px rounded"
+                            style={{ color: hex, backgroundColor: hex + "1A" }}
+                          >
+                            {CATEGORY_MAP[n.category] || n.category.toUpperCase()}
+                          </span>
+                          <span className="font-mono text-[10px] text-tremor-content-subtle tabular-nums">{n.real_time.slice(0, 16).replace("T", " ")}</span>
+                        </div>
+                        <div className="text-[12px] leading-snug font-medium text-tremor-content-emphasis">{n.headline}</div>
+                        <div className="invisible group-hover/head:visible absolute top-full left-3 z-50 bg-tremor-background-emphasis text-tremor-content-emphasis text-[11px] leading-snug p-2 rounded-md shadow-xl border border-tremor-brand/25 max-w-xs -mt-1">
+                          {n.impact_hint}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </AnimatePresence>
               )}
             </div>
           </Panel>
@@ -700,7 +757,7 @@ export default function Home() {
         <div className="flex flex-col gap-2 min-h-0 min-w-0">
 
           {/* CHART */}
-          <Panel title="Price Action" className="flex-[11]" headerExtra={
+          <Panel title="Price Action" icon={LineChart} style={{ flex: "11 1 0%" }} headerExtra={
             <div className="flex items-center gap-3">
               <TabGroup index={([3, 15, 30, 60, "all"] as const).indexOf(timeframe as any)} onIndexChange={(i) => setTimeframe([3, 15, 30, 60, "all"][i] as any)}>
                 <TabList variant="line" className="p-0.5">
@@ -751,15 +808,26 @@ export default function Home() {
           </Panel>
 
           {/* POSITIONS BLOTTER */}
-          <Panel title="Live Portfolio" className="flex-[8]" headerExtra={
-            <button
-              onClick={liquidateAll}
-              className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-md text-loss/90 hover:text-loss hover:bg-loss/10 border border-transparent hover:border-loss/20 transition-colors cursor-pointer"
-            >
-              Liquidate All
-            </button>
+          <Panel title="Live Portfolio" icon={Briefcase} style={{ flex: "8 1 0%" }} headerExtra={
+            <div className="flex items-center gap-2">
+              <TabGroup index={portfolioTab} onIndexChange={setPortfolioTab}>
+                <TabList variant="solid" className="p-0.5">
+                  <Tab className="text-[10px] font-bold uppercase tracking-wider py-0.5 px-3">Positions</Tab>
+                  <Tab className="text-[10px] font-bold uppercase tracking-wider py-0.5 px-3">Greeks</Tab>
+                </TabList>
+              </TabGroup>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
+                onClick={liquidateAll}
+                className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-md text-loss/90 hover:text-loss hover:bg-loss/10 border border-transparent hover:border-loss/20 transition-colors cursor-pointer"
+              >
+                <Trash2 size={11} />
+                Liquidate All
+              </motion.button>
+            </div>
           }>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-auto">
+              {portfolioTab === 0 ? (
               <Table>
                 <TableHead className="sticky top-0 bg-tremor-background z-10">
                   <TableRow className="border-b border-tremor-border">
@@ -786,7 +854,7 @@ export default function Home() {
                       const posValue = Math.abs(p.quantity * size * p.current);
                       const isPositive = p.pnl >= 0;
                       return (
-                        <TableRow key={p.contract_id} className={`border-b border-tremor-border/40 hover:bg-white/[0.03] transition-colors ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
+                        <TableRow key={p.contract_id} className={`border-b border-tremor-border/40 hover:bg-white/[0.03] transition-all duration-300 ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
                           <TableCell className="px-3 py-2 font-semibold text-[12px] text-tremor-content-emphasis">{p.label.split(" (")[0]}</TableCell>
                           <TableCell className="px-2 py-2 text-right">
                             <span className="font-mono font-semibold text-[12px] tabular-nums" style={{ color: p.quantity >= 0 ? GAIN : LOSS }}>{p.quantity}</span>
@@ -797,12 +865,14 @@ export default function Home() {
                             <span className="font-mono font-semibold text-[12px] tabular-nums" style={{ color: isPositive ? GAIN : LOSS }}>{fmtMoney(p.pnl)}</span>
                           </TableCell>
                           <TableCell className="px-2 py-2 text-right">
-                            <button
+                            <motion.button
+                              whileHover={{ scale: 1.08 }}
+                              whileTap={{ scale: 0.9 }}
                               onClick={() => closePosition(p.contract_id, p.quantity)}
                               className="inline-flex items-center justify-center w-7 h-7 rounded-md text-tremor-content-subtle hover:text-loss hover:bg-loss/15 transition-colors cursor-pointer"
                             >
-                              <XIcon />
-                            </button>
+                              <X size={13} strokeWidth={2.5} />
+                            </motion.button>
                           </TableCell>
                         </TableRow>
                       );
@@ -810,6 +880,50 @@ export default function Home() {
                   )}
                 </TableBody>
               </Table>
+              ) : (
+              <Table className="table-fixed w-full">
+                <TableHead className="sticky top-0 bg-tremor-background z-10">
+                  <TableRow className="border-b border-tremor-border">
+                    <TableHeaderCell className="px-2 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle w-[30%]">Security</TableHeaderCell>
+                    <TableHeaderCell className="px-1.5 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Delta</TableHeaderCell>
+                    <TableHeaderCell className="px-1.5 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Gamma</TableHeaderCell>
+                    <TableHeaderCell className="px-1.5 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Vega</TableHeaderCell>
+                    <TableHeaderCell className="px-1.5 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Theta/d</TableHeaderCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {!portfolio || portfolio.positions.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-10 text-center text-tremor-content-subtle text-[12px] italic">
+                        No open positions {"—"} risk will appear here.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    <>
+                      {portfolio.positions.map(p => {
+                        const isClosing = closingPositions.has(p.contract_id);
+                        return (
+                          <TableRow key={p.contract_id} className={`border-b border-tremor-border/40 hover:bg-white/[0.03] transition-all duration-300 ${isClosing ? "opacity-40 grayscale pointer-events-none" : ""}`}>
+                            <TableCell className="px-2 py-2 font-semibold text-[11px] text-tremor-content-emphasis truncate" title={p.label.split(" (")[0]}>{p.label.split(" (")[0]}</TableCell>
+                            <TableCell className="px-1.5 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: p.delta >= 0 ? GAIN : LOSS }}>{fmt(p.delta, 0)}</span></TableCell>
+                            <TableCell className="px-1.5 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: p.gamma >= 0 ? GAIN : LOSS }}>{fmt(p.gamma, 2)}</span></TableCell>
+                            <TableCell className="px-1.5 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: p.vega >= 0 ? GAIN : LOSS }}>{fmtMoney(p.vega)}</span></TableCell>
+                            <TableCell className="px-1.5 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: p.theta >= 0 ? GAIN : LOSS }}>{fmtMoney(p.theta)}</span></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                      <TableRow className="border-t border-tremor-border bg-white/[0.02]">
+                        <TableCell className="px-2 py-2 text-[10px] uppercase tracking-wider font-bold text-tremor-content-subtle">Net (book)</TableCell>
+                        <TableCell className="px-1.5 py-2 text-right"><span className="font-mono font-bold text-[11px] tabular-nums" style={{ color: portfolio.net_delta >= 0 ? GAIN : LOSS }}>{fmt(portfolio.net_delta, 0)}</span></TableCell>
+                        <TableCell className="px-1.5 py-2 text-right"><span className="font-mono font-bold text-[11px] tabular-nums" style={{ color: portfolio.net_gamma >= 0 ? GAIN : LOSS }}>{fmt(portfolio.net_gamma, 2)}</span></TableCell>
+                        <TableCell className="px-1.5 py-2 text-right"><span className="font-mono font-bold text-[11px] tabular-nums" style={{ color: portfolio.net_vega >= 0 ? GAIN : LOSS }}>{fmtMoney(portfolio.net_vega)}</span></TableCell>
+                        <TableCell className="px-1.5 py-2 text-right"><span className="font-mono font-bold text-[11px] tabular-nums" style={{ color: portfolio.net_theta >= 0 ? GAIN : LOSS }}>{fmtMoney(portfolio.net_theta)}</span></TableCell>
+                      </TableRow>
+                    </>
+                  )}
+                </TableBody>
+              </Table>
+              )}
             </div>
           </Panel>
         </div>
@@ -818,7 +932,7 @@ export default function Home() {
         <div className="flex flex-col gap-2 min-h-0 min-w-0">
 
           {/* EXECUTION */}
-          <Panel title="Execution" className="flex-[8]" headerExtra={
+          <Panel title="Execution" icon={Zap} style={{ flex: "15 1 0%" }} headerExtra={
             <TabGroup index={exchangeTab} onIndexChange={setExchangeTab}>
               <TabList variant="solid" className="p-0.5">
                 <Tab className="text-[10px] font-bold uppercase tracking-wider py-0.5 px-3">Options</Tab>
@@ -827,7 +941,7 @@ export default function Home() {
             </TabGroup>
           }>
             <div className="flex-1 p-2.5 flex flex-col min-h-0">
-              <div className="flex items-center gap-2.5 mb-1 shrink-0 animate-fade-in">
+              <div className="flex items-center gap-2.5 mb-0.5 shrink-0 animate-fade-in">
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: accentHex }}></span>
                 <span className="text-[18px] font-bold tracking-tight text-tremor-content-strong leading-none whitespace-nowrap">
                   {selectedUnderlying ? shortTicker(selectedUnderlying) : "Select Asset"}
@@ -837,15 +951,17 @@ export default function Home() {
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle pointer-events-none">Qty</span>
                   <input
                     type="number"
+                    max={MAX_ORDER_QTY}
                     value={tradeQty}
-                    onChange={e => setTradeQty(e.target.value === "" ? "" : Math.max(1, parseInt(e.target.value) || 1))}
+                    onChange={e => setTradeQty(e.target.value === "" ? "" : Math.min(MAX_ORDER_QTY, Math.max(1, parseInt(e.target.value) || 1)))}
                     className="w-full bg-tremor-background-muted border border-tremor-border rounded-md h-8 pl-9 pr-2 font-mono text-[14px] text-tremor-content-emphasis outline-none focus:border-tremor-brand/50 transition-colors tabular-nums"
                   />
                 </div>
                 <div className="flex gap-1">
-                  {[1, 10, 50, 100].map(v => (
-                    <button
+                  {[1, 10, 100, 1000].map(v => (
+                    <motion.button
                       key={v}
+                      whileTap={{ scale: 0.92 }}
                       onClick={() => setTradeQty(v)}
                       className={`h-8 px-2.5 rounded-md text-[11px] font-bold font-mono transition-colors cursor-pointer border ${
                         tradeQty === v
@@ -854,37 +970,56 @@ export default function Home() {
                       }`}
                     >
                       {v}
-                    </button>
+                    </motion.button>
                   ))}
                 </div>
               </div>
 
               <div className="flex-1 min-h-[46px] overflow-y-auto mb-0.5">
                 {exchangeTab === 0 ? (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
-                      const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
-                      if (!c) return null;  // strike not offered for this underlying (worthless premium)
-                      const isSel = contractType === type;
-                      const name = OPTION_NAMES[type];
-                      return (
-                        <div
-                          key={type}
-                          onClick={() => setContractType(type)}
-                          className={`px-2.5 py-1 cursor-pointer rounded-md border transition-all flex flex-col gap-0.5 ${isSel ? "" : "border-tremor-border bg-tremor-background-muted/40 hover:bg-white/[0.03] hover:border-tremor-ring"}`}
-                          style={isSel ? { borderColor: accentHex, backgroundColor: accentHex + "14", boxShadow: `inset 0 0 0 1px ${accentHex}40` } : undefined}
-                        >
-                          <div className="flex items-baseline justify-between gap-1">
-                            <span className="text-[12px] font-bold tracking-wide text-tremor-content-emphasis whitespace-nowrap">{name.heading}</span>
-                            <span className="text-[15px] font-bold font-mono leading-none text-tremor-content-strong tabular-nums">{fmtPx(c?.premium || 0)}</span>
-                          </div>
-                          <div className="flex items-baseline justify-between gap-1">
-                            <span className="text-[9px] uppercase font-bold tracking-wider text-tremor-content-subtle">Strike</span>
-                            <span className="text-[11px] font-mono text-tremor-content tabular-nums">{fmtPx(c?.strike || 0)}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="rounded-md border border-tremor-border overflow-hidden">
+                    <Table>
+                      <TableHead>
+                        <TableRow className="border-b border-tremor-border bg-tremor-background-subtle/40">
+                          <TableHeaderCell className="px-3 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle">Type</TableHeaderCell>
+                          <TableHeaderCell className="px-2 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Strike</TableHeaderCell>
+                          <TableHeaderCell className="px-2 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Premium</TableHeaderCell>
+                          <TableHeaderCell className="px-2 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Delta</TableHeaderCell>
+                          <TableHeaderCell className="px-2 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Gamma</TableHeaderCell>
+                          <TableHeaderCell className="px-2 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Vega</TableHeaderCell>
+                          <TableHeaderCell className="px-3 py-2 text-[9px] uppercase tracking-wider font-bold text-tremor-content-subtle text-right">Theta/d</TableHeaderCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(["bullish", "bearish", "lottery", "hedge"] as const).map(type => {
+                          const c = contracts.find(x => x.underlying === selectedUnderlying && x.id.endsWith(`_${type}`));
+                          if (!c) return null;  // strike not offered for this underlying (worthless premium)
+                          const isSel = contractType === type;
+                          const name = OPTION_NAMES[type];
+                          return (
+                            <TableRow
+                              key={type}
+                              onClick={() => setContractType(type)}
+                              className="relative border-b border-tremor-border/40 last:border-b-0 cursor-pointer transition-colors hover:bg-white/[0.03]"
+                              style={isSel ? { backgroundColor: accentHex + "12" } : undefined}
+                            >
+                              <TableCell className="px-3 py-2 relative">
+                                {isSel && <div className="absolute left-0 top-1 bottom-1 w-[3px] rounded-r" style={{ backgroundColor: accentHex }}></div>}
+                                <span className="text-[11px] font-bold tracking-wide whitespace-nowrap" style={{ color: isSel ? accentHex : undefined }}>{name.heading}</span>
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right font-mono text-[11px] text-tremor-content tabular-nums">{fmtPx(c?.strike || 0)}</TableCell>
+                              <TableCell className="px-2 py-2 text-right font-mono text-[13px] font-bold text-tremor-content-strong tabular-nums">
+                                <AnimatedNumber value={c?.premium || 0} format={fmtPx} />
+                              </TableCell>
+                              <TableCell className="px-2 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: (c?.delta ?? 0) >= 0 ? GAIN : LOSS }}>{fmt(c?.delta ?? 0, 2)}</span></TableCell>
+                              <TableCell className="px-2 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: (c?.gamma ?? 0) >= 0 ? GAIN : LOSS }}>{fmt(c?.gamma ?? 0, 3)}</span></TableCell>
+                              <TableCell className="px-2 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: (c?.vega ?? 0) >= 0 ? GAIN : LOSS }}>{fmtMoney(c?.vega ?? 0)}</span></TableCell>
+                              <TableCell className="px-3 py-2 text-right"><span className="font-mono text-[11px] tabular-nums" style={{ color: (c?.theta ?? 0) >= 0 ? GAIN : LOSS }}>{fmtMoney(c?.theta ?? 0)}</span></TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
                   </div>
                 ) : (
                   (() => {
@@ -918,34 +1053,59 @@ export default function Home() {
                 )}
               </div>
 
+              <AnimatePresence>
+                {orderError && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="shrink-0 overflow-hidden"
+                  >
+                    <div className="mb-1.5 px-2.5 py-1.5 rounded-md border border-loss/30 bg-loss/10 text-[11px] text-loss font-medium">
+                      {orderError}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <div className="grid grid-cols-2 gap-2.5 mb-0.5 shrink-0">
-                <div
+                <motion.div
+                  whileHover={{ scale: 1.015 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => placeOrder(-1)}
-                  className={`flex items-center justify-center gap-2.5 py-1 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-all ${pulseSell ? "btn-pulse-sell" : ""}`}
+                  className={`flex items-center justify-center gap-2 py-0.5 cursor-pointer rounded-md border border-loss/30 bg-loss/[0.08] hover:bg-loss/[0.16] hover:border-loss/50 transition-colors ${pulseSell ? "btn-pulse-sell" : ""}`}
                 >
+                  <ArrowDownRight size={14} className="text-loss/80" />
                   <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-loss/90">Sell {"·"} Bid</span>
-                  <span className="font-mono text-[19px] font-bold text-loss tabular-nums leading-none">{fmtPx(bidAsk.bid)}</span>
-                </div>
-                <div
+                  <span className="font-mono text-[19px] font-bold text-loss tabular-nums leading-none"><AnimatedNumber value={bidAsk.bid} format={fmtPx} /></span>
+                </motion.div>
+                <motion.div
+                  whileHover={{ scale: 1.015 }}
+                  whileTap={{ scale: 0.98 }}
                   onClick={() => placeOrder(1)}
-                  className={`flex items-center justify-center gap-2.5 py-1 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-all ${pulseBuy ? "btn-pulse-buy" : ""}`}
+                  className={`flex items-center justify-center gap-2 py-0.5 cursor-pointer rounded-md border border-gain/30 bg-gain/[0.08] hover:bg-gain/[0.16] hover:border-gain/50 transition-colors ${pulseBuy ? "btn-pulse-buy" : ""}`}
                 >
+                  <ArrowUpRight size={14} className="text-gain/80" />
                   <span className="text-[10px] uppercase tracking-[0.12em] font-bold text-gain/90">Buy {"·"} Ask</span>
-                  <span className="font-mono text-[19px] font-bold text-gain tabular-nums leading-none">{fmtPx(bidAsk.ask)}</span>
-                </div>
+                  <span className="font-mono text-[19px] font-bold text-gain tabular-nums leading-none"><AnimatedNumber value={bidAsk.ask} format={fmtPx} /></span>
+                </motion.div>
               </div>
 
               <div className="mt-auto shrink-0 border-t border-tremor-border pt-1.5 flex justify-between items-baseline">
                 <span className="text-tremor-content-subtle uppercase text-[10px] font-bold tracking-[0.12em]">Notional Value</span>
                 <span className="font-mono text-[15px] text-tremor-content-strong tabular-nums">
-                  {"£"}{fmt((Number(tradeQty) || 0) * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0))}
+                  <AnimatedNumber
+                    value={(Number(tradeQty) || 0) * (CONTRACT_SIZE[selectedUnderlying || ""] || 1) * (selectedContract?.premium || 0)}
+                    format={(n) => `£${fmt(n)}`}
+                  />
                 </span>
               </div>
             </div>
           </Panel>
 
           {/* CLIENT DESK */}
-          <Panel title="Client Desk" className="flex-[11]" headerExtra={
+          <Panel title="Client Desk" icon={MessagesSquare} style={{ flex: "13 1 0%" }} headerExtra={
             (() => {
               const live = deskRows.filter((r: any) => r.rfq?.status === "open").length;
               return (
@@ -1004,38 +1164,34 @@ export default function Home() {
                   const defQty = live ? String(rfq.quantity) : "";
                   return (
                     <>
-                      <div className="px-3 py-2 border-b border-tremor-border shrink-0 bg-tremor-background-subtle/30">
-                        <div className="text-[12px] font-bold text-tremor-content-emphasis">{row.client_name}</div>
-                        <div className="text-[11px] text-tremor-content mt-0.5">
-                          {rfq ? <>{live ? "wants a market in" : "last asked for"} <span className="font-mono tabular-nums">{rfq.quantity}</span> {tkr} <span className="uppercase">{kind}</span> {"·"} ref mid <span className="font-mono tabular-nums">{fmtPx(refMid)}</span> {"·"} {statusLabel(rfq)}</> : "no active request"}
-                        </div>
+                      <div className="px-3 py-1.5 border-b border-tremor-border shrink-0 bg-tremor-background-subtle/30 flex items-baseline gap-1.5 flex-wrap">
+                        <span className="text-[12px] font-bold text-tremor-content-emphasis">{row.client_name}</span>
+                        <span className="text-[11px] text-tremor-content-subtle">
+                          {"·"} {rfq ? <>{live ? "wants a market in" : "last asked for"} <span className="font-mono tabular-nums">{rfq.quantity}</span> {tkr} <span className="uppercase">{OPTION_NAMES[kind]?.heading ?? kind.toUpperCase()}</span> {"·"} ref mid <span className="font-mono tabular-nums">{fmtPx(refMid)}</span> {"·"} {statusLabel(rfq)}</> : "no active request"}
+                        </span>
                       </div>
                       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1.5 bg-tremor-background-muted/40 min-h-0">
                         {t.length === 0 ? (
                           <div className="text-[11px] text-tremor-content-subtle italic">No messages yet.</div>
                         ) : t.map((m: any, i: number) => (
-                          <div key={i} className={`flex ${m.sender === "you" ? "justify-end" : "justify-start"}`}>
+                          <motion.div
+                            key={i}
+                            initial={{ opacity: 0, y: 6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.22, ease: "easeOut" }}
+                            className={`flex ${m.sender === "you" ? "justify-end" : "justify-start"}`}
+                          >
                             <div className={`max-w-[85%] rounded-md px-2 py-1 text-[11px] leading-snug ${m.sender === "you" ? "bg-tremor-brand/15 text-tremor-content-emphasis border border-tremor-brand/20" : "bg-white/[0.05] text-tremor-content border border-tremor-border/60"}`}>
                               <span className="opacity-50 mr-1">{m.sender === "you" ? "You:" : `${row.client_name}:`}</span>{m.text}
                             </div>
-                          </div>
+                          </motion.div>
                         ))}
                       </div>
-                      <div className="p-2 border-t border-tremor-border shrink-0 flex flex-col gap-1.5">
-                        {live && (
-                          <div className="flex gap-1 flex-wrap">
-                            {["Coming now", "Working it", "Can't help"].map(txt => (
-                              <button key={txt} onClick={() => sendClientMsg(rfq.rfq_id, txt)}
-                                className="text-[10px] px-2 py-1 rounded-md border border-tremor-border bg-tremor-background-muted text-tremor-content hover:border-tremor-brand/40 hover:text-tremor-content-emphasis transition-colors cursor-pointer">
-                                {txt}
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                      <div className="p-1.5 border-t border-tremor-border shrink-0 flex flex-col gap-1">
                         {rfq && (
                           <input type="text" placeholder={live ? "Message client…" : "Say something…"}
                             onKeyDown={e => { if (e.key === "Enter") { sendClientMsg(rfq.rfq_id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = ""; } }}
-                            className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors" />
+                            className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[12px] outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors" />
                         )}
                         <div className="flex gap-2 items-end">
                           <div className="flex flex-col min-w-0">
@@ -1044,7 +1200,7 @@ export default function Home() {
                               type="text"
                               value={quoteTickers[qKey] ?? defTkr}
                               onChange={e => setQuoteTickers(prev => ({ ...prev, [qKey]: e.target.value }))}
-                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0 transition-colors"
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[12px] font-mono uppercase outline-none focus:border-tremor-brand/50 w-16 min-w-0 transition-colors"
                             />
                           </div>
                           <div className="flex flex-col min-w-0">
@@ -1053,27 +1209,30 @@ export default function Home() {
                               type="text"
                               value={quoteQtys[qKey] ?? defQty}
                               onChange={e => setQuoteQtys(prev => ({ ...prev, [qKey]: e.target.value }))}
-                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0 transition-colors tabular-nums"
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[12px] font-mono outline-none focus:border-tremor-brand/50 w-14 min-w-0 transition-colors tabular-nums"
                             />
                           </div>
                           <div className="flex flex-col flex-1 min-w-0">
                             <span className="text-[9px] uppercase tracking-wider font-bold text-loss/90 mb-0.5">Your Bid</span>
                             <input type="number" placeholder="bid" value={quoteBids[qKey] || ""}
                               onChange={e => setQuoteBids(prev => ({ ...prev, [qKey]: e.target.value }))}
-                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-loss/50 transition-colors tabular-nums w-full" />
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[12px] font-mono outline-none focus:border-loss/50 transition-colors tabular-nums w-full" />
                           </div>
                           <div className="flex flex-col flex-1 min-w-0">
                             <span className="text-[9px] uppercase tracking-wider font-bold text-gain/90 mb-0.5">Your Ask</span>
                             <input type="number" placeholder="ask" value={quoteAsks[qKey] || ""}
                               onChange={e => setQuoteAsks(prev => ({ ...prev, [qKey]: e.target.value }))}
-                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-8 px-2 text-[12px] font-mono outline-none focus:border-gain/50 transition-colors tabular-nums w-full" />
+                              className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 px-2 text-[12px] font-mono outline-none focus:border-gain/50 transition-colors tabular-nums w-full" />
                           </div>
-                          <button
+                          <motion.button
+                            whileHover={{ scale: 1.04 }}
+                            whileTap={{ scale: 0.94 }}
                             onClick={() => live ? sendClientQuote(rfq.rfq_id) : sendUnsolicitedQuote(row.client_id)}
-                            className="h-8 px-3 rounded-md text-[11px] font-bold uppercase tracking-wider bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis transition-colors shrink-0 cursor-pointer"
+                            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-[11px] font-bold uppercase tracking-wider bg-tremor-brand text-tremor-brand-inverted hover:bg-tremor-brand-emphasis transition-colors shrink-0 cursor-pointer"
                           >
+                            <Send size={11} />
                             Quote
-                          </button>
+                          </motion.button>
                         </div>
                         {!live && (
                           <div className="flex items-center justify-between gap-2">
@@ -1097,6 +1256,9 @@ export default function Home() {
         </>
       )}
     </main>
+    {showSplash && (
+      <Splash ready={portfolio !== null} onDone={() => setShowSplash(false)} />
+    )}
     </div>
   );
 }
@@ -1134,7 +1296,7 @@ function Briefing({ startSim }: { startSim: () => void }) {
       {/* session parameters */}
       <div className="relative grid grid-cols-4 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background/70 animate-rise" style={{ animationDelay: "260ms" }}>
         {([
-          ["Capital", "£100,000"],
+          ["Capital", "£10,000,000"],
           ["Clock", "60:00"],
           ["Instruments", "12"],
           ["Tape", "MAR–MAY 2025"],
@@ -1168,7 +1330,7 @@ function Briefing({ startSim }: { startSim: () => void }) {
       </button>
 
       <Link
-        href="/"
+        href="/select-side"
         className="relative font-mono text-[10px] tracking-[0.22em] text-tremor-content-subtle hover:text-tremor-content transition-colors animate-rise"
         style={{ animationDelay: "500ms" }}
       >
@@ -1180,14 +1342,19 @@ function Briefing({ startSim }: { startSim: () => void }) {
 
 // --- Sub-components (presentational only) ---
 
-function Panel({ title, headerExtra, className = "", children }: {
-  title: string; headerExtra?: React.ReactNode; className?: string; children: React.ReactNode;
+function Panel({ title, icon: Icon, headerExtra, className = "", style, children }: {
+  title: string; icon?: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+  headerExtra?: React.ReactNode; className?: string; style?: React.CSSProperties; children: React.ReactNode;
 }) {
   return (
-    <section className={`bg-tremor-background border border-tremor-border rounded-lg flex flex-col overflow-hidden min-h-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_28px_-14px_rgba(0,0,0,0.6)] ${className}`}>
+    <section
+      className={`bg-tremor-background border border-tremor-border rounded-lg flex flex-col overflow-hidden min-h-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_28px_-14px_rgba(0,0,0,0.6)] ${className}`}
+      style={style}
+    >
       <div className="h-10 flex items-center justify-between pl-3 pr-2 border-b border-tremor-border shrink-0 bg-tremor-background-subtle/40">
         <div className="flex items-center gap-2">
           <span className="w-[3px] h-3.5 rounded-full bg-tremor-brand/80"></span>
+          {Icon && <Icon size={13} strokeWidth={2.2} className="text-tremor-brand/70" />}
           <span className="text-[11px] uppercase font-bold tracking-[0.18em] text-tremor-content">{title}</span>
         </div>
         {headerExtra}
@@ -1209,7 +1376,39 @@ function ClassChip({ type }: { type: string }) {
   );
 }
 
-function Stat({ label, value, delta, emphasis }: { label: string; value: string; delta?: number; emphasis?: boolean }) {
+// Lightweight inline trend line for a table row — deliberately raw SVG rather
+// than another ApexCharts instance: a dozen of these render every tick, and a
+// dozen full chart instances would be needlessly heavy for a 56×20px glyph.
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  if (data.length < 2) return <div className="w-[56px] h-[20px]" />;
+  const w = 56, h = 20, pad = 2;
+  const lo = Math.min(...data), hi = Math.max(...data);
+  const span = Math.max(hi - lo, Math.abs(hi) * 1e-6, 1e-9);
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * (w - pad * 2) + pad;
+    const y = h - pad - ((v - lo) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0 overflow-visible">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Smoothly tweens between successive numeric values (spring physics) instead of
+// snapping — the ticking-odometer feel of a real trading terminal's P&L strip.
+function AnimatedNumber({ value, format }: { value: number; format: (n: number) => string }) {
+  const spring = useSpring(value, { stiffness: 140, damping: 24, mass: 0.6 });
+  const [display, setDisplay] = useState(value);
+  useEffect(() => { spring.set(value); }, [value, spring]);
+  useMotionValueEvent(spring, "change", (latest) => setDisplay(latest));
+  return <>{format(display)}</>;
+}
+
+function Stat({ label, rawValue, format, delta, emphasis }: {
+  label: string; rawValue: number; format: (n: number) => string; delta?: number; emphasis?: boolean;
+}) {
   const pnlColor = delta === undefined ? undefined : delta > 0 ? GAIN : delta < 0 ? LOSS : undefined;
   return (
     <div className="flex flex-col justify-center px-5 gap-1 min-w-0">
@@ -1219,11 +1418,23 @@ function Stat({ label, value, delta, emphasis }: { label: string; value: string;
           className={`font-mono font-semibold tabular-nums ${emphasis ? "text-[18px]" : "text-[15px]"} ${pnlColor ? "" : "text-tremor-content-emphasis"}`}
           style={pnlColor ? { color: pnlColor } : undefined}
         >
-          {value}
+          <AnimatedNumber value={rawValue} format={format} />
         </span>
-        {delta !== undefined && delta !== 0 && (
-          <span className="text-[11px] font-bold" style={{ color: pnlColor }}>{delta > 0 ? "▴" : "▾"}</span>
-        )}
+        <AnimatePresence mode="wait" initial={false}>
+          {delta !== undefined && delta !== 0 && (
+            <motion.span
+              key={delta > 0 ? "up" : "down"}
+              initial={{ opacity: 0, y: delta > 0 ? 3 : -3, scale: 0.7 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.7 }}
+              transition={{ duration: 0.18 }}
+              className="text-[11px] font-bold"
+              style={{ color: pnlColor }}
+            >
+              {delta > 0 ? "▴" : "▾"}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </span>
     </div>
   );

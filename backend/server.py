@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
-from contracts import build_menu, price_contract, liquidity_quote, Contract
-from portfolio import Portfolio
+from contracts import build_menu, price_contract, liquidity_quote, contract_greeks, Contract, T_YEARS
+from portfolio import Portfolio, CONTRACT_SIZE
 from clients import seed_rfqs, evaluate_two_way, evaluate_unsolicited, maybe_spawn_rfq, qty_in_band, solicit_rfq, CLIENTS, RFQ, MAX_COUNTER_ROUNDS, apply_message, post_message, all_threads
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
@@ -30,6 +30,14 @@ SIM_DURATION_SEC = 60 * 60
 TICK_HZ          = 1
 DATA_TIME_SCALE  = 0.025  # slow the tape: ~1/40 of the historical window per sim hour
 HISTORY_LEN      = 240   # 60s of history at 4Hz, plenty for a chart
+
+# Hard ceiling on any single trade's quantity, regardless of instrument or
+# direction. The biggest legitimate size in the game is a whale client's RFQ
+# (up to 10,000 lots); 2x that gives real headroom for aggressive hedging
+# without opening the door to the liquidity-impact model's far tail, where
+# fill prices detach entirely from fair value (at 100,000 lots the size-impact
+# alone pushes price to ~2.6x fair — no longer "extreme," just nonsensical).
+MAX_ORDER_QTY = 20_000
 
 # Unsolicited fills get their own id space so they can never collide with rfq_N
 _unsol_seq = itertools.count(1)
@@ -71,7 +79,7 @@ class SimSession:
         self.contracts: list[Contract] = build_menu(initial_tick.prices)
         self.contracts_by_id = {c.contract_id: c for c in self.contracts}
         self.portfolio = Portfolio()
-        self.rfqs = seed_rfqs(list(self.contracts_by_id.keys()))
+        self.rfqs = seed_rfqs(list(self.contracts_by_id.keys()), spots=initial_tick.prices)
         self.scheduler = NewsScheduler(
             news_path=NEWS_PATH,
             real_start=self.engine.real_start.replace(tzinfo=timezone.utc),
@@ -87,19 +95,67 @@ class SimSession:
         self.sim_time = 0.0
         self.running = False
 
+    def time_to_expiry(self) -> float:
+        """Remaining time to expiry in years, shared by every contract on the
+        menu. All contracts are quoted with a 30-calendar-day tenor (T_YEARS)
+        starting at sim_time=0. As sim_time advances, the replay's compression
+        factor tells us how much CALENDAR time that represents, so we count
+        down from T_YEARS toward 0. Real theta decay falls out of feeding this
+        into Black-Scholes; at t=0 black_scholes() already returns pure
+        intrinsic value, which is exactly the payoff of exercise (ITM) or
+        worthless expiry (OTM) — no separate settlement step is needed since
+        these are cash-settled, not physically-settled, contracts."""
+        elapsed_years = (self.sim_time * self.engine.compression) / (365 * 86400)
+        return max(0.0, T_YEARS - elapsed_years)
+
+    def _afford(self, contract: Contract, qty: int, fill: float) -> tuple[bool, str]:
+        """(ok, reason). reason is a ready-to-show rejection message when not
+        ok, else "". Two independent gates:
+          1. MAX_ORDER_QTY — an absolute size ceiling on every trade, any
+             instrument, any direction. This is the ONLY thing that can catch
+             an absurd futures order or a naked short: futures never spend
+             cash up front in this model (only realised P&L on close moves
+             cash), and selling anything receives premium rather than
+             spending it, so neither is bounded by the cash check below.
+          2. Cash affordability — only a non-future BUY spends cash up front.
+        """
+        if abs(qty) > MAX_ORDER_QTY:
+            return False, (f"Order too large — max {MAX_ORDER_QTY:,} lots per trade, "
+                            f"you asked for {abs(qty):,}.")
+        if contract.option_type == "future" or qty <= 0:
+            return True, ""
+        size = CONTRACT_SIZE.get(contract.underlying, 1)
+        cost = qty * fill * size
+        if cost > self.portfolio.cash:
+            return False, (f"Insufficient cash — this order costs £{cost:,.2f} but only "
+                            f"£{self.portfolio.cash:,.2f} is available.")
+        return True, ""
+
     def menu_for_frontend(self) -> list[dict]:
+        t = self.time_to_expiry()
         out = []
         for c in self.contracts:
             spot = self.current_prices.get(c.underlying, 0.0)
+            size = CONTRACT_SIZE.get(c.underlying, 1)
+            g = contract_greeks(c, spot, t)
             out.append({
                 "id":       c.contract_id,
                 "label":    c.label,
                 "subtitle": c.subtitle,
                 "type":     c.option_type,
                 "strike":   c.strike,
-                "premium":  price_contract(c, spot),
+                "premium":  price_contract(c, spot, t),
                 "underlying": c.underlying,
                 "spot":     spot,
+                # Delta/gamma stay PER-UNIT (the standard "0.45 delta" quote-sheet
+                # convention, same regardless of contract size) since nothing's
+                # been bought yet — there's no position to scale against.
+                # Vega/theta are per-CONTRACT dollars (x contract_size), the
+                # other half of how a real desk actually reads a risk sheet.
+                "delta": g["delta"],
+                "gamma": g["gamma"],
+                "vega":  g["vega"] * size,
+                "theta": g["theta"] * size,
             })
         return out
 
@@ -113,9 +169,12 @@ class SimSession:
         if not contract or qty == 0:
             return {"type": "error", "message": "Invalid order"}
         spot = self.current_prices[contract.underlying]
-        quote = liquidity_quote(contract, spot, qty)
+        quote = liquidity_quote(contract, spot, qty, self.time_to_expiry())
         # Buy fills at ask, sell fills at bid — same spread the user was quoted
         fill = quote["ask"] if qty > 0 else quote["bid"]
+        ok, reason = self._afford(contract, qty, fill)
+        if not ok:
+            return {"type": "error", "message": reason}
         note = self.portfolio.trade(contract, qty, fill)
         return {"type": "order_ack", "message": note, "fill": fill}
 
@@ -126,7 +185,7 @@ class SimSession:
         if not contract:
             return {"type": "quote", "bid": 0, "ask": 0}
         spot = self.current_prices[contract.underlying]
-        q = liquidity_quote(contract, spot, qty)
+        q = liquidity_quote(contract, spot, qty, self.time_to_expiry())
         return {
             "type": "quote",
             "contract_id": cid,
@@ -146,7 +205,7 @@ class SimSession:
 
         contract = self.contracts_by_id.get(rfq.contract_id)
         spot = self.current_prices[contract.underlying]
-        mid = price_contract(contract, spot)
+        mid = price_contract(contract, spot, self.time_to_expiry())
         now = self.sim_time
         if mid <= 0:
             return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
@@ -193,6 +252,10 @@ class SimSession:
                     "message": "Crossed or invalid market \u2014 your bid must be below your ask."}
 
         if traded:
+            ok, reason = self._afford(contract, dealer_qty, fill_price)
+            if not ok:
+                return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
+                        "message": f"Can't fill this \u2014 {reason}"}
             note = self.portfolio.trade(contract, dealer_qty, fill_price)
             n = abs(dealer_qty)
             remaining = rfq.quantity - n   # reduced fills keep the RFQ open for the balance
@@ -305,7 +368,7 @@ class SimSession:
                     "message": "Quantity must be positive."}
 
         spot = self.current_prices[contract.underlying]
-        mid = price_contract(contract, spot)
+        mid = price_contract(contract, spot, self.time_to_expiry())
         now = self.sim_time
         if mid <= 0:
             return {"type": "client_result", "rfq_id": None, "accepted": False,
@@ -354,6 +417,10 @@ class SimSession:
                     "message": f"{client.name} countered at {counter_px:.4f} \u2014 improve your market and re-quote."}
 
         # traded: book dealer_qty exactly as evaluate_unsolicited returned it
+        ok, reason = self._afford(contract, dealer_qty, fill_price)
+        if not ok:
+            return {"type": "client_result", "rfq_id": None, "accepted": False,
+                    "message": f"Can't fill this — {reason}"}
         note = self.portfolio.trade(contract, dealer_qty, fill_price)
         if not action.endswith("_partial"):
             # Full fill ends the negotiation; a partial keeps rounds so the cap can't be reset
@@ -407,12 +474,12 @@ class SimSession:
         result = apply_message(rfq, text, now)
         if result["reply"]:
             post_message(rfq.client_id, "client", result["reply"], now)
-        return {"type": "client_msg_result", "rfq_id": rfq_id,
-                "intent": result["intent"], "effect": result["effect"]}
+        return {"type": "client_msg_result", "rfq_id": rfq_id}
 
     def handle_request_market(self, msg: dict) -> dict:
         client_id = msg.get("client_id")
-        rfq = solicit_rfq(self.rfqs, client_id, self.sim_time, list(self.contracts_by_id.keys()))
+        rfq = solicit_rfq(self.rfqs, client_id, self.sim_time, list(self.contracts_by_id.keys()),
+                         spots=self.current_prices)
         if rfq is None:
             name = CLIENTS[client_id].name if client_id in CLIENTS else str(client_id)
             return {"type": "client_result", "rfq_id": None, "accepted": False,
@@ -468,14 +535,15 @@ async def ws_endpoint(websocket: WebSocket):
             session.current_prices = dict(tick.prices)
             session.tick_idx = i
             session.sim_time = tick.sim_time
-            maybe_spawn_rfq(session.rfqs, tick.sim_time, list(session.contracts_by_id.keys()))
+            maybe_spawn_rfq(session.rfqs, tick.sim_time, list(session.contracts_by_id.keys()),
+                            spots=session.current_prices)
 
             # Append to history
             for ticker, px in tick.prices.items():
                 session.history[ticker].append({"t": tick.sim_time, "px": px})
 
             snap = session.portfolio.mark_to_market(
-                session.contracts, session.current_prices,
+                session.contracts, session.current_prices, session.time_to_expiry(),
             )
             await websocket.send_json({
                 "type":      "tick",

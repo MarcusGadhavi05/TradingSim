@@ -1,12 +1,11 @@
 """
 Client desk: pseudo-clients, RFQs, persistent chat threads.
-Slice 3: tolerance (urgency widens, annoyance shrinks), messaging, canned replies.
+Tolerance (urgency widens, annoyance shrinks) plus persona-driven chat replies.
 """
 
 import os
 import math
 import random
-import json
 import itertools
 import traceback
 from dataclasses import dataclass, asdict, field
@@ -25,27 +24,65 @@ class Client:
     base_tolerance: float
     urgency_ramp: float
     interest_map: dict = field(default_factory=dict)
+    # Typical clip sizes this client's RFQs are drawn from. Bank-desk scale:
+    # ~5x the old retail-ish 10-200 range, but still a clear step below the
+    # whale accounts below, so Solstice/Colossus still feel like the biggest
+    # tickets on the desk rather than just more of the same.
+    qty_choices: tuple = (50, 100, 250, 500, 1000)
 
 CLIENTS = {
-    "vortex":      Client("vortex",      "Vortex Capital",        "Aggressive macro fund",       0.018, 2.5, interest_map={
+    "harrow":      Client("harrow",      "Harrow Global Macro",   "Aggressive macro fund",       0.018, 2.5, interest_map={
         "SPY_future":      {"desired_side": "buy",  "edge_threshold": 0.010, "max_qty": None},
         "GBPUSD=X_future": {"desired_side": "sell", "edge_threshold": 0.008, "max_qty": None},
-        "JPY=X_future":    {"desired_side": "buy",  "edge_threshold": 0.008, "max_qty": 300},
-        "BZ=F_future":     {"desired_side": "buy",  "edge_threshold": 0.012, "max_qty": 200},
-        "GC=F_bullish":    {"desired_side": "buy",  "edge_threshold": 0.015, "max_qty": 150},
-        "NVDA_lottery":    {"desired_side": "buy",  "edge_threshold": 0.020, "max_qty": 150},
+        "JPY=X_future":    {"desired_side": "buy",  "edge_threshold": 0.008, "max_qty": 1500},
+        "BZ=F_future":     {"desired_side": "buy",  "edge_threshold": 0.012, "max_qty": 1000},
+        "GC=F_bullish":    {"desired_side": "buy",  "edge_threshold": 0.015, "max_qty": 750},
+        "NVDA_lottery":    {"desired_side": "buy",  "edge_threshold": 0.020, "max_qty": 750},
     }),
-    "helix":       Client("helix",       "Helix Trading",         "Quant prop / HFT",            0.012, 3.0),
+    "perrystreet": Client("perrystreet", "Perry Street Trading",  "Quant prop / ETF & options arb", 0.012, 3.0),
     "monarch":     Client("monarch",     "Monarch Pension",       "Size-sensitive real-money",   0.035, 1.2, interest_map={
-        "IGLT.L_future": {"desired_side": "buy",  "edge_threshold": 0.030, "max_qty": 50},
-        "SPY_hedge":     {"desired_side": "buy",  "edge_threshold": 0.035, "max_qty": 40},
-        "AZN.L_future":  {"desired_side": "sell", "edge_threshold": 0.030, "max_qty": 25},
+        "IGLT.L_future": {"desired_side": "buy",  "edge_threshold": 0.030, "max_qty": 250},
+        "SPY_hedge":     {"desired_side": "buy",  "edge_threshold": 0.035, "max_qty": 200},
+        "AZN.L_future":  {"desired_side": "sell", "edge_threshold": 0.030, "max_qty": 125},
     }),
     "brightwater": Client("brightwater", "Brightwater Treasury",  "Corporate hedger",            0.045, 0.9),
     "stonehaven":  Client("stonehaven",  "Stonehaven Asset Mgmt", "Long-only asset manager",     0.030, 1.3),
     "calloway":    Client("calloway",    "Calloway Family Office","Demanding family office",     0.040, 1.8),
     "meridian":    Client("meridian",    "Meridian Systematic",   "Systematic CTA",              0.022, 1.6),
-    "albion":      Client("albion",      "Albion Life",           "Insurance / LDI",             0.050, 0.8),
+    "zuidas":      Client("zuidas",      "Zuidas Derivatives",    "Options market maker — sharp, blunt, size-flexible", 0.014, 2.8,
+        interest_map={
+            "SPY_bullish":    {"desired_side": "sell", "edge_threshold": 0.012, "max_qty": 800},
+            "ASML.AS_hedge":  {"desired_side": "buy",  "edge_threshold": 0.014, "max_qty": 600},
+            "NVDA_bearish":   {"desired_side": "sell", "edge_threshold": 0.016, "max_qty": 500},
+        },
+    ),
+    "kinross":     Client("kinross",     "Kinross Re",            "Pension risk transfer / bulk annuity insurer", 0.050, 0.7,
+        qty_choices=(100, 250, 500, 1000, 2000),
+    ),
+    "solstice":    Client("solstice",    "Solstice Sovereign Wealth Fund", "Sovereign wealth fund — vast, patient real money", 0.026, 0.5,
+        interest_map={
+            "SPY_future":     {"desired_side": "buy", "edge_threshold": 0.012, "max_qty": 6000},
+            "GC=F_future":    {"desired_side": "buy", "edge_threshold": 0.016, "max_qty": 4000},
+            "IGLT.L_future":  {"desired_side": "buy", "edge_threshold": 0.022, "max_qty": 5000},
+        },
+        qty_choices=(500, 1000, 2500, 5000, 10000),
+    ),
+    "colossus":    Client("colossus",    "Colossus Capital Partners", "Mega multi-strategy hedge fund — huge, aggressive size", 0.015, 2.8,
+        interest_map={
+            "NVDA_lottery":    {"desired_side": "buy",  "edge_threshold": 0.018, "max_qty": 3000},
+            "BZ=F_future":     {"desired_side": "sell", "edge_threshold": 0.010, "max_qty": 4000},
+            "GBPUSD=X_future": {"desired_side": "buy",  "edge_threshold": 0.008, "max_qty": 5000},
+        },
+        qty_choices=(500, 1000, 2000, 5000),
+    ),
+    "obsidian":    Client("obsidian",    "Obsidian Asset Management", "Giant institutional asset manager — calm, index-heavy, process-driven", 0.024, 0.6,
+        interest_map={
+            "SPY_future":      {"desired_side": "buy",  "edge_threshold": 0.010, "max_qty": 8000},
+            "EURUSD=X_future": {"desired_side": "sell", "edge_threshold": 0.010, "max_qty": 5000},
+            "IGLT.L_future":   {"desired_side": "buy",  "edge_threshold": 0.018, "max_qty": 4000},
+        },
+        qty_choices=(500, 1000, 2500, 5000, 8000),
+    ),
 }
 
 
@@ -83,7 +120,6 @@ class RFQ:
     deadline_sec: float
     base_tolerance: float
     urgency_ramp: float
-    extended: bool = False
     last_answered_sec: float = 0.0
     status: str = "open"
     counter_px: float = 0.0      # level the client countered at (0 = none)
@@ -114,22 +150,98 @@ class RFQ:
 
 _rfq_seq = itertools.count(1)
 
-def _make_rfq(client: Client, contract_id: str, now: float) -> RFQ:
+# ---------- Notional-based ticket sizing ----------
+#
+# Ticket size is expressed here as underlying notional (spot x contract size x
+# quantity) rather than a fixed lot count. A fixed "50-1000 lots" range means
+# wildly different money depending what's being traded — 1000 lots of a cheap
+# OTM option is pocket change, 1000 lots of an FX future is enormous — so raw
+# lot counts were producing tickets with no consistent relationship to the
+# desk's own book size. Bands below are calibrated against the desk's
+# starting capital (Portfolio.cash, portfolio.py) so a client's ticket size
+# actually reflects how big they are relative to your £10,000,000, instead of
+# being an arbitrary contract count. (min_notional, max_notional) in GBP.
+NOTIONAL_BANDS: dict[str, tuple] = {
+    "harrow":      (150_000,    800_000),
+    "perrystreet": (50_000,     400_000),
+    "monarch":     (100_000,    500_000),
+    "brightwater": (50_000,     300_000),
+    "stonehaven":  (100_000,    600_000),
+    "calloway":    (50_000,     300_000),
+    "meridian":    (150_000,    800_000),
+    "zuidas":      (100_000,    700_000),
+    "kinross":     (300_000,  1_500_000),
+    "solstice":    (500_000,  4_000_000),
+    "colossus":    (750_000,  5_000_000),
+    "obsidian":    (500_000,  3_500_000),
+}
+
+
+def _round_qty(q: float) -> int:
+    """Round a raw notional-derived quantity to a clean, desk-readable lot
+    count — mirrors the flavour of the old hand-picked choices (50, 100, 250,
+    500, 1000, ...) instead of leaving ugly numbers like '743' on screen."""
+    if q < 20:
+        step = 1
+    elif q < 200:
+        step = 5
+    elif q < 2000:
+        step = 25
+    else:
+        step = 100
+    return max(1, int(round(q / step) * step))
+
+
+# FX tickers quoted "foreign units per USD" (JPY=X is USD/JPY: ~150 yen per
+# dollar) rather than "USD per foreign unit" like GBPUSD=X/EURUSD=X (~1.2-1.3).
+# Their contract size already expresses notional directly in the non-yen base
+# currency, so — unlike every other instrument here — that notional must NOT
+# also be multiplied by the (much larger, inverted-scale) yen spot price, or a
+# lot looks ~150x bigger than it really is and notional sizing collapses to
+# the 1-lot floor. Treat their "price" as 1 rather than spot.
+INVERTED_FX_QUOTE = {"JPY=X"}
+
+
+def _qty_from_notional(contract_id: str, spot: float, min_notional: float, max_notional: float) -> int:
+    """Convert a random notional ticket into a lot count for this contract.
+    Uses underlying notional (spot x contract size), not premium, for both
+    options and futures — an option's cheap premium would otherwise blow the
+    lot count up to keep the same £ notional, which is not how ticket size is
+    actually meant when a client says '£500k of these calls'."""
+    from portfolio import CONTRACT_SIZE  # local import: avoids a hard import-time cycle with portfolio.py
+    underlying = contract_id.rsplit("_", 1)[0]
+    size = CONTRACT_SIZE.get(underlying, 1)
+    price = 1.0 if underlying in INVERTED_FX_QUOTE else spot
+    notional = random.uniform(min_notional, max_notional)
+    raw_qty = notional / max(price, 1e-9) / size
+    return _round_qty(raw_qty)
+
+
+def _make_rfq(client: Client, contract_id: str, now: float,
+             spots: dict[str, float] | None = None) -> RFQ:
     side = random.choice(("buy", "sell"))
-    qty = random.choice((10, 25, 50, 100, 200))
+    band = NOTIONAL_BANDS.get(client.client_id)
+    underlying = contract_id.rsplit("_", 1)[0]
+    if band is not None and spots is not None and underlying in spots:
+        qty = _qty_from_notional(contract_id, spots[underlying], *band)
+    else:
+        # Fallback for callers with no live spot (e.g. standalone offline
+        # scripts/tests) — keeps the old fixed-lot behaviour rather than erroring.
+        qty = random.choice(client.qty_choices)
     window = random.uniform(60.0, 150.0)        # seconds until deadline
     return RFQ(f"rfq_{next(_rfq_seq)}", client.client_id, client.name, contract_id,
                side, qty, now, now + window, client.base_tolerance, client.urgency_ramp)
 
 
-def seed_rfqs(contract_ids: list[str]) -> list[RFQ]:
+def seed_rfqs(contract_ids: list[str], spots: dict[str, float] | None = None) -> list[RFQ]:
     """Open the desk with a few live RFQs from different clients."""
-    starters = ["vortex", "helix", "monarch", "brightwater"]
-    return [_make_rfq(CLIENTS[cid], random.choice(contract_ids), 0.0) for cid in starters]
+    starters = ["harrow", "perrystreet", "monarch", "brightwater"]
+    return [_make_rfq(CLIENTS[cid], random.choice(contract_ids), 0.0, spots) for cid in starters]
 
 
 def maybe_spawn_rfq(rfqs: list[RFQ], now: float, contract_ids: list[str],
-                    max_open: int = 8, rate: float = 0.05, quiet_secs: float = 150.0) -> RFQ | None:
+                    max_open: int = 8, rate: float = 0.05, quiet_secs: float = 150.0,
+                    spots: dict[str, float] | None = None) -> RFQ | None:
     """Occasionally hand a new RFQ to an idle client. Skips clients with recent
     chat activity so a conversation you are in does not get a new request mid-flow.
     Every RFQ close posts a client message, so quiet_secs also acts as a cooldown
@@ -143,7 +255,7 @@ def maybe_spawn_rfq(rfqs: list[RFQ], now: float, contract_ids: list[str],
     idle = [c for cid, c in CLIENTS.items() if cid not in open_clients and not busy(cid)]
     if not idle:
         return None
-    rfq = _make_rfq(random.choice(idle), random.choice(contract_ids), now)
+    rfq = _make_rfq(random.choice(idle), random.choice(contract_ids), now, spots)
     rfqs.append(rfq)
     return rfq
 
@@ -164,9 +276,8 @@ def evaluate_quote(rfq: RFQ, your_price: float, mid: float, now: float) -> bool:
     return your_price >= mid * (1 - tol)
 
 
-# ---------- Intent detection (Haiku + keyword fallback) ----------
+# ---------- Anthropic client + offline fallback reply ----------
 
-INTENTS = ["coming_now", "working_it", "cant_help", "unclear"]
 _client = None
 
 def _get_anthropic():
@@ -179,60 +290,27 @@ def _get_anthropic():
             _client = Anthropic(api_key=key)
     return _client
 
-def _keyword_intent(text: str) -> str:
-    t = text.lower()
-    if any(w in t for w in ["coming", "omw", "sec", "moment", "hold", "wait", "now"]):
-        return "coming_now"
-    if any(w in t for w in ["working", "on it", "looking", "checking"]):
-        return "working_it"
-    if any(w in t for w in ["can't", "cant", "no", "pass", "sorry"]):
-        return "cant_help"
-    return "unclear"
 
-def detect_intent(text: str) -> str:
-    client = _get_anthropic()
-    if client is None:
-        return _keyword_intent(text)
-    try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=10,
-            system=(
-                "You classify a trader's chat message to a client into ONE intent. "
-                f"Reply with ONLY one word from this list: {', '.join(INTENTS)}. "
-                "coming_now = will price it imminently / asking to hold. "
-                "working_it = actively looking but not ready. "
-                "cant_help = declining / can't quote. "
-                "unclear = none of the above."
-            ),
-            messages=[{"role": "user", "content": text}],
-        )
-        out = resp.content[0].text.strip().lower()
-        return out if out in INTENTS else "unclear"
-    except Exception:
-        return _keyword_intent(text)
+# Used only when there's no API key or a call fails — the game must never
+# break just because chat is unavailable. Not tied to what the trader typed,
+# only to how annoyed the client currently is.
+_CALM_FALLBACK  = ["Noted, thanks.", "Understood.", "Ok, appreciate it."]
+_HUFFY_FALLBACK = [
+    "Whenever you get a chance, I'd really appreciate a price.",
+    "Still keen when you're ready - no rush, just flagging it.",
+    "Would love to get this wrapped up when you have a moment, thanks.",
+]
 
-
-# ---------- Canned client replies ----------
-
-_REPLIES = {
-    "coming_now":  ["Cheers, standing by.", "Ok, waiting on you.", "Right, don't be long."],
-    "working_it":  ["Appreciate it.", "Ok, keep me posted.", "Sure."],
-    "cant_help":   ["Understood, I'll go elsewhere.", "No worries, thanks."],
-    "unclear":     ["Sorry — didn't catch that?", "Come again?"],
-}
-_HUFFY = ["Any day now…", "I'm losing patience here.", "This is taking forever."]
-
-def client_reply(intent: str, annoyance: float) -> str | None:
-    if annoyance > 0.6 and intent in ("coming_now", "working_it") and random.random() < 0.7:
-        return random.choice(_HUFFY)
-    if intent in ("coming_now", "working_it") and random.random() < 0.25:
-        return None
-    return random.choice(_REPLIES.get(intent, _REPLIES["unclear"]))
+def _fallback_reply(annoyance: float) -> str:
+    if annoyance > 0.6 and random.random() < 0.7:
+        return random.choice(_HUFFY_FALLBACK)
+    return random.choice(_CALM_FALLBACK)
 
 
 def apply_message(rfq: RFQ, text: str, now: float) -> dict:
-    """Process your message: classify intent, apply effect, generate in-persona reply."""
+    """Process your message: generate an in-persona reply. Chat is flavor and
+    relationship-management — it does not extend deadlines or auto-reject a
+    request; only the price/size you actually quote drives that."""
     annoyance = rfq.annoyance(now)                       # capture BEFORE resetting the clock
     history = thread_for(rfq.client_id)[:-1]             # exclude the just-posted current message
     turn = generate_client_turn(
@@ -243,76 +321,107 @@ def apply_message(rfq: RFQ, text: str, now: float) -> dict:
         player_message=text,
         annoyance=annoyance,
         history=history,
+        rfq_status=rfq.status,
     )
-    intent = turn["intent"]
-    reply = turn["reply"]
-
-    effect = None
-    if rfq.status == "open":
-        if intent in ("coming_now", "working_it") and not rfq.extended:
-            rfq.deadline_sec += 30
-            rfq.extended = True
-            effect = "deadline_extended"
-        elif intent == "cant_help":
-            rfq.status = "rejected"
-            effect = "closed"
     rfq.last_answered_sec = now
-    return {"intent": intent, "effect": effect, "reply": reply}
+    return {"reply": turn["reply"]}
 
 
 # ---------- Persona-driven replies (Haiku, one combined call) ----------
 
 PERSONAS = {
-    "vortex": (
-        "You ARE Vortex Capital, an aggressive global-macro hedge fund, talking to a "
-        "sell-side trader on a chat line. Voice: clipped trading-floor slang, impatient, "
-        "transactional, no pleasantries. Lowercase, abbreviations fine (omw, lvls, mid, "
-        "where r u, show me). Usually under 8 words. You want a price NOW and hate waiting. "
-        "Never apologise, never explain yourself."
+    "harrow": (
+        "You ARE Harrow Global Macro, an aggressive global-macro hedge fund, talking to a "
+        "sell-side trader on a chat line. Voice: brisk, efficient, trading-floor shorthand "
+        "(omw, lvls, mid), but courteous \u2014 you value the trader's time as much as your own. "
+        "Usually under 12 words. You'd like a price promptly, and you say so plainly and "
+        "pleasantly rather than snapping; if the trader explains a delay, acknowledge it."
     ),
-    "helix": (
-        "You ARE Helix Trading, a quant prop / HFT shop, talking to a sell-side trader on a "
-        "chat line. Voice: ultra-terse, numeric, latency-obsessed, zero small talk. Often "
-        "just a few words or a number. You want the tightest price instantly and call out "
-        "anything wide. e.g. 'px?', '2 wide, no', 'done if 1'."
+    "perrystreet": (
+        "You ARE Perry Street Trading, an elite quant proprietary trading firm known for ETF "
+        "and options arbitrage, talking to a sell-side trader on a chat line. Voice: terse and "
+        "numeric by habit, but friendly and easy to deal with. You want a tight price quickly "
+        "and will say plainly if something looks wide, but you explain why when it's useful and "
+        "never talk down to the trader. e.g. 'px?', 'that's a touch wide for me, mind tightening?'."
     ),
     "monarch": (
         "You ARE Monarch Pension, a large real-money pension fund, talking to a sell-side "
-        "trader on a chat line. Voice: measured, courteous, formal, process-driven and very "
+        "trader on a chat line. Voice: measured, warm, formal, process-driven and very "
         "size-sensitive \u2014 you care about getting filled in size without moving the "
         "market and you reference your mandate or committee. Full polite sentences, patient "
-        "but firm. One or two sentences."
+        "and appreciative of good service. One or two sentences."
     ),
     "brightwater": (
         "You ARE Brightwater Treasury, the corporate treasury of a non-financial company "
-        "hedging FX and rates exposure, talking to a sell-side trader. Voice: polite, plain "
+        "hedging FX and rates exposure, talking to a sell-side trader. Voice: friendly, plain "
         "English, not a markets native \u2014 you are hedging a business need, not trading a "
-        "view. You reference budget rates, board approval or hedging policy, and you sometimes "
-        "check your understanding of jargon. Full courteous sentences."
+        "view. You reference budget rates, board approval or hedging policy, ask questions "
+        "openly when unsure of jargon, and thank the trader for their help. Full courteous "
+        "sentences."
     ),
     "stonehaven": (
         "You ARE Stonehaven Asset Management, a long-only asset manager, talking to a "
-        "sell-side trader. Voice: professional, calm, benchmark-aware, unhurried. You care "
-        "about tracking your benchmark and executing cleanly, not about a few seconds. "
-        "One or two measured sentences."
+        "sell-side trader. Voice: professional, calm, benchmark-aware, unhurried, and genuinely "
+        "collegial. You care about tracking your benchmark and executing cleanly, not about a "
+        "few seconds, and you're happy to work with the trader rather than pressure them. "
+        "One or two measured, friendly sentences."
     ),
     "calloway": (
         "You ARE Calloway Family Office, managing money for a wealthy principal, talking to a "
-        "sell-side trader. Voice: informal but demanding, relationship-driven, expects "
-        "white-glove service and a little impatient. You invoke 'the principal' and expect to "
-        "be prioritised. Short, slightly entitled."
+        "sell-side trader. Voice: warm, relationship-driven, appreciative of attentive service. "
+        "You mention 'the principal' occasionally and value being looked after, but you're "
+        "gracious about it, not entitled \u2014 you say please and thank you and take a fair "
+        "no for an answer. Short, friendly sentences."
     ),
     "meridian": (
         "You ARE Meridian Systematic, a systematic CTA / trend fund, talking to a sell-side "
-        "trader. Voice: flat, unemotional, rules-driven. You execute because a signal fired, "
-        "not because you have an opinion. Terse, mechanical, no pleasantries. "
-        "e.g. 'Signal fired. Need execution. Price.'"
+        "trader. Voice: flat, matter-of-fact, rules-driven \u2014 you execute because a signal "
+        "fired, not because you have an opinion \u2014 but still courteous. Terse and "
+        "mechanical, not cold; a brief 'thanks' or 'appreciated' costs nothing. "
+        "e.g. 'Signal fired, need execution when you have a moment. Price?'."
     ),
-    "albion": (
-        "You ARE Albion Life, an insurance / LDI account, talking to a sell-side trader. "
-        "Voice: very conservative, formal, slow, risk-averse. You speak in terms of matching "
-        "liabilities, duration and regulatory constraints, and you are never rushed. "
-        "Careful, polite sentences."
+    "zuidas": (
+        "You ARE Zuidas Derivatives, a Dutch options market-making firm out of Amsterdam, "
+        "talking to a sell-side trader on a chat line. Voice: direct, confident, faintly "
+        "accented English, genuinely interested in vol and skew \u2014 and friendly with it. "
+        "You quote back in basis points and vol points rather than adjectives, and you'll say "
+        "plainly if a market looks wide, but lightly and without sarcasm. e.g. 'that skew looks "
+        "generous to me', 'could you tighten that up a touch?'."
+    ),
+    "kinross": (
+        "You ARE Kinross Re, a pension risk transfer insurer that takes on bulk annuity and "
+        "longevity risk from corporate pension schemes, talking to a sell-side trader. Voice: "
+        "conservative, formal, unhurried, and consistently courteous. You speak in terms of "
+        "matching liabilities, duration, Solvency II capital and regulatory constraints, and "
+        "you are never rushed \u2014 a deal like this took months of due diligence to get to "
+        "this call. Careful, polite sentences. Confirmations, settlement and legal "
+        "documentation are your own ops/legal team's job, done entirely outside this chat \u2014 "
+        "you never ask the trader for paperwork here, and once a price is agreed you don't "
+        "relitigate it."
+    ),
+    "solstice": (
+        "You ARE Solstice Sovereign Wealth Fund, a state-owned sovereign wealth fund managing "
+        "hundreds of billions, talking to a sell-side trader on a chat line. Voice: formal, "
+        "measured, unhurried, and graciously courteous \u2014 size and discretion matter far "
+        "more than a few seconds or a shaved basis point. You reference minimising market "
+        "impact, your mandate, or your long-term horizon. Full, warm sentences. Never rushed, "
+        "never sharp, and appreciative when the trader handles your flow well."
+    ),
+    "colossus": (
+        "You ARE Colossus Capital Partners, a mega multi-strategy hedge fund running tens of "
+        "billions, talking to a sell-side trader on a chat line. Voice: confident and direct "
+        "\u2014 you trade in size that moves markets and you know it \u2014 but genuinely "
+        "respectful of the trader's work. Short, clear sentences, no sarcasm. You expect good "
+        "service because of your flow, and you say thanks when you get it."
+    ),
+    "obsidian": (
+        "You ARE Obsidian Asset Management, the world's largest asset manager, running index "
+        "funds, ETFs and multi-asset mandates on trillions in AUM, talking to a sell-side "
+        "trader on a chat line. Voice: calm, formal, unhurried, institutional, and warmly "
+        "professional \u2014 you are never rattled and never in a rush, because size and "
+        "process matter far more than a few seconds. You reference fiduciary duty, best "
+        "execution, benchmarks, or your internal risk platform. Full, measured, courteous "
+        "sentences."
     ),
 }
 
@@ -325,41 +434,72 @@ def generate_client_turn(
     player_message: str,
     annoyance: float = 0.0,
     history: list[dict] | None = None,
+    rfq_status: str = "open",
 ) -> dict:
     """
-    ONE Haiku call that both (a) classifies the TRADER's message into an INTENT
-    (drives the deterministic game effect) and (b) writes the client's in-persona REPLY.
-    Returns {"intent": <one of INTENTS>, "reply": <str>}.
-    Any failure (no key, unknown client, bad JSON, API error) falls back to the
-    keyword classifier + template reply, so the game never breaks.
+    One Haiku call that writes the client's in-persona REPLY to the trader's
+    chat message. Returns {"reply": <str>}. Purely flavor/relationship-management
+    — it has no effect on the RFQ's deadline or status. Any failure (no key,
+    unknown client, API error) falls back to a neutral templated reply, so the
+    game never breaks.
     """
     persona = PERSONAS.get(client_id)
     client = _get_anthropic()
 
     if client is None or persona is None:
-        intent = detect_intent(player_message)
-        return {"intent": intent, "reply": client_reply(intent, annoyance)}
+        return {"reply": _fallback_reply(annoyance)}
 
     if annoyance < 0.33:
-        mood = "You are calm."
+        mood = "You are calm and in no hurry."
     elif annoyance < 0.66:
-        mood = "You are getting impatient at being kept waiting."
+        mood = "You would genuinely appreciate a price soon, but you stay courteous about it."
     else:
-        mood = "You are angry at how long this is taking."
+        mood = (
+            "It has been a while and you would like to move this along, but you remain "
+            "polite and professional throughout - firm about wanting a price, never rude."
+        )
+
+    # rfq_status tells the model whether this deal is still live. Without this,
+    # every reply was framed as "still waiting on a price" even long after the
+    # trade filled — which, combined with a formal/back-office-flavoured persona,
+    # caused the model to invent an ongoing paperwork/settlement subplot that
+    # never resolves, since nothing ever told it the deal was already done.
+    if rfq_status == "filled":
+        deal_context = (
+            f"You already agreed a price and executed this trade ({side} {quantity} "
+            f"{contract_id}) — it is DONE and booked. Any confirmation, settlement or "
+            "paperwork is handled entirely by your own back-office/ops team, NOT over "
+            "this chat, and NOT something the trader can produce for you here. Do not "
+            "ask the trader for documents, do not stall or withhold new business over "
+            "it, and do not keep revisiting this deal turn after turn — acknowledge "
+            "briefly at most, then move on."
+        )
+    elif rfq_status in ("rejected", "expired"):
+        deal_context = (
+            f"This particular request ({side} {quantity} {contract_id}) is no longer "
+            "live — it was declined or timed out. Don't keep pressing on it; you may "
+            "still bring the trader new business separately."
+        )
+    else:
+        deal_context = (
+            f"You sent this trader an RFQ to {side} {quantity} of {contract_id} and "
+            "you are waiting on their price."
+        )
 
     system = (
         persona + "\n\n"
-        f"CONTEXT: You sent this trader an RFQ to {side} {quantity} of {contract_id} "
-        "and you are waiting on their price. The message below is the TRADER's latest "
+        f"CONTEXT: {deal_context} The message below is the TRADER's latest "
         f"chat line to you. {mood}\n\n"
-        "Return ONLY a JSON object (no markdown, no prose, no code fences) with two keys:\n"
-        f'  "intent": classify the TRADER\'S message as exactly one of {INTENTS}. '
-        "coming_now = they will price it imminently or ask you to hold; "
-        "working_it = actively looking but not ready; "
-        "cant_help = declining or cannot quote; unclear = none of these.\n"
-        '  "reply": your next chat line back to the trader, fully in persona and '
-        "consistent with that intent. Keep it short.\n"
-        'Example: {"intent": "coming_now", "reply": "..."}'
+        "Before replying, actually read the conversation history above the trader's "
+        "latest line. React to what they specifically just said - a number they quoted, "
+        "a reason they gave, a question they asked - rather than a generic in-persona "
+        "one-liner that would fit any message. Do not repeat a phrase or sentence "
+        "structure you've already used earlier in this conversation; say it differently "
+        "each time, the way a real person would. Stay warm, receptive and easy to deal "
+        "with even when you're pressing for a price - firmness and politeness are not "
+        "in tension here.\n\n"
+        "Reply with ONLY your next chat line back to the trader, fully in persona. "
+        "No preamble, no quotation marks, no markdown, no code fences. Keep it short."
     )
 
     msgs = []
@@ -372,28 +512,15 @@ def generate_client_turn(
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=120,
+            max_tokens=80,
             system=system,
             messages=msgs,
         )
-        raw = resp.content[0].text.strip()
-        if raw.startswith("```"):
-            raw = raw.strip("`")
-            if raw[:4].lower() == "json":
-                raw = raw[4:]
-            raw = raw.strip()
-        data = json.loads(raw)
-        intent = str(data.get("intent", "")).strip().lower()
-        reply = data.get("reply", "")
-        if intent not in INTENTS:
-            intent = _keyword_intent(player_message)
-        if not isinstance(reply, str) or not reply.strip():
-            reply = client_reply(intent, annoyance) or ""
-        return {"intent": intent, "reply": reply.strip()}
+        reply = resp.content[0].text.strip()
+        return {"reply": reply or _fallback_reply(annoyance)}
     except Exception:
         traceback.print_exc()
-        intent = detect_intent(player_message)
-        return {"intent": intent, "reply": client_reply(intent, annoyance)}
+        return {"reply": _fallback_reply(annoyance)}
 # ---------- Negotiation bands (multiples of each client's own threshold) ----------
 
 CLOSE_FACTOR       = 1.25   # up to 1.25x T: full size, grudging
@@ -483,14 +610,15 @@ def evaluate_unsolicited(client: Client, contract_id: str, your_bid: float,
     return _tiered_decision(interest["desired_side"], your_bid, your_ask, mid,
                             interest["edge_threshold"], qty)
 
-def solicit_rfq(rfqs: list[RFQ], client_id: str, now: float, contract_ids: list[str]) -> RFQ | None:
+def solicit_rfq(rfqs: list[RFQ], client_id: str, now: float, contract_ids: list[str],
+                spots: dict[str, float] | None = None) -> RFQ | None:
     """Player asks a quiet client for a market. New RFQ only if they have none open."""
     client = CLIENTS.get(client_id)
     if client is None:
         return None
     if any(r.client_id == client_id and r.status == "open" for r in rfqs):
         return None
-    rfq = _make_rfq(client, random.choice(contract_ids), now)
+    rfq = _make_rfq(client, random.choice(contract_ids), now, spots)
     rfqs.append(rfq)
     post_message(client_id, "client", f"Sure \u2014 show me a market in {rfq.quantity} {rfq.contract_id}.", now)
     return rfq
