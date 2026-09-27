@@ -75,6 +75,16 @@ type NewsItem = {
   category: string;
   headline: string;
   impact_hint: string;
+  commentary?: string;       // filled in async if the AI commentary toggle is on
+  commentaryPending?: boolean;
+};
+
+type DebriefData = {
+  text: string;
+  portfolio: Portfolio;
+  tradeCount: number;
+  clientFills: number;
+  directTrades: number;
 };
 
 const CONTRACT_SIZE: Record<string, number> = {
@@ -176,14 +186,18 @@ export default function Home() {
   const [quoteTickers, setQuoteTickers] = useState<Record<string, string>>({});
   const [quoteQtys, setQuoteQtys] = useState<Record<string, string>>({});
   const [threads, setThreads] = useState<Record<string, { sender: string; text: string; sim_time: number }[]>>({});
+  const [commentaryOn, setCommentaryOn] = useState(false);
+  const [debrief, setDebrief] = useState<DebriefData | null>(null);
   const selectedUnderlyingRef = useRef<string | null>(null);
   const contractTypeRef = useRef<string>("bullish");
   const exchangeTabRef = useRef<number>(0);
   const tradeQtyRef = useRef<number | "">("");
+  const commentaryOnRef = useRef(false);
   useEffect(() => { selectedUnderlyingRef.current = selectedUnderlying; }, [selectedUnderlying]);
   useEffect(() => { contractTypeRef.current = contractType; }, [contractType]);
   useEffect(() => { exchangeTabRef.current = exchangeTab; }, [exchangeTab]);
   useEffect(() => { tradeQtyRef.current = tradeQty; }, [tradeQty]);
+  useEffect(() => { commentaryOnRef.current = commentaryOn; }, [commentaryOn]);
 
   // Optimistic UI states
   const [closingPositions, setClosingPositions] = useState<Set<string>>(new Set());
@@ -234,6 +248,7 @@ export default function Home() {
     setShowSplash(true);
     setNews([]);
     setTimeMap({});
+    setDebrief(null);
     let simDone = false;   // set on sim_complete — a finished sim must not auto-reconnect
     const connect = () => {
     const ws = new WebSocket(BACKEND_WS);
@@ -273,7 +288,19 @@ export default function Home() {
           }));
         }
       } else if (msg.type === "news") {
-        setNews((prev) => [msg, ...prev]);
+        setNews((prev) => [{ ...msg, commentaryPending: commentaryOnRef.current }, ...prev]);
+        if (commentaryOnRef.current && ws.readyState === 1) {
+          ws.send(JSON.stringify({
+            type: "commentary_request",
+            headline: msg.headline,
+            impact_hint: msg.impact_hint,
+            category: msg.category,
+          }));
+        }
+      } else if (msg.type === "commentary") {
+        setNews((prev) => prev.map(n =>
+          n.headline === msg.headline ? { ...n, commentary: msg.text, commentaryPending: false } : n
+        ));
       } else if (msg.type === "quote") {
         // Ignore stale/mismatched responses (e.g. from just before a ticker switch)
         const suffix = exchangeTabRef.current === 1 ? "future" : contractTypeRef.current;
@@ -282,6 +309,13 @@ export default function Home() {
       } else if (msg.type === "sim_complete") {
         simDone = true;
         setRunning(false);
+        setDebrief({
+          text: msg.debrief,
+          portfolio: msg.portfolio,
+          tradeCount: msg.trade_count,
+          clientFills: msg.client_fills,
+          directTrades: msg.direct_trades,
+        });
       } else if (msg.type === "client_result") {
         setClientMsg(msg.message);
       } else if (msg.type === "error") {
@@ -700,15 +734,29 @@ export default function Home() {
 
           {/* NEWS */}
           <Panel title="Market Intelligence" icon={Newspaper} style={{ flex: "8 1 0%" }} headerExtra={
-            <div className="relative">
-              <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Search news…"
-                value={newsSearch}
-                onChange={e => setNewsSearch(e.target.value)}
-                className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 pl-6 pr-2 text-[11px] w-44 outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors"
-              />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCommentaryOn(v => !v)}
+                title="Ask the desk for a one-line reaction to each headline as it fires (uses the Claude API per headline)"
+                className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer ${
+                  commentaryOn
+                    ? "border-tremor-brand/50 bg-tremor-brand/10 text-tremor-brand"
+                    : "border-tremor-border bg-tremor-background-muted text-tremor-content-subtle hover:text-tremor-content"
+                }`}
+              >
+                <Zap size={11} />
+                AI Commentary {commentaryOn ? "On" : "Off"}
+              </button>
+              <div className="relative">
+                <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-tremor-content-subtle pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search news…"
+                  value={newsSearch}
+                  onChange={e => setNewsSearch(e.target.value)}
+                  className="bg-tremor-background-muted border border-tremor-border rounded-md h-7 pl-6 pr-2 text-[11px] w-44 outline-none placeholder:text-tremor-content-subtle/70 focus:border-tremor-brand/50 transition-colors"
+                />
+              </div>
             </div>
           }>
             <div className="flex-1 min-h-0 overflow-y-auto">
@@ -741,6 +789,12 @@ export default function Home() {
                           <span className="font-mono text-[10px] text-tremor-content-subtle tabular-nums">{n.real_time.slice(0, 16).replace("T", " ")}</span>
                         </div>
                         <div className="text-[12px] leading-snug font-medium text-tremor-content-emphasis">{n.headline}</div>
+                        {(n.commentary || n.commentaryPending) && (
+                          <div className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug italic text-tremor-brand/90">
+                            <Zap size={10} className="shrink-0 mt-0.5" />
+                            {n.commentary ? <span>{n.commentary}</span> : <span className="opacity-60">Desk reacting{"…"}</span>}
+                          </div>
+                        )}
                         <div className="invisible group-hover/head:visible absolute top-full left-3 z-50 bg-tremor-background-emphasis text-tremor-content-emphasis text-[11px] leading-snug p-2 rounded-md shadow-xl border border-tremor-brand/25 max-w-xs -mt-1">
                           {n.impact_hint}
                         </div>
@@ -1259,6 +1313,9 @@ export default function Home() {
     {showSplash && (
       <Splash ready={portfolio !== null} onDone={() => setShowSplash(false)} />
     )}
+    {debrief && (
+      <Debrief data={debrief} onClose={() => setDebrief(null)} onNewSession={() => { setDebrief(null); startSim(); }} />
+    )}
     </div>
   );
 }
@@ -1271,6 +1328,15 @@ function Briefing({ startSim }: { startSim: () => void }) {
     ["02", "QUOTE THE CLIENTS", "RFQs land on the client desk. Show a two-way price — win the trade at your level."],
     ["03", "HEDGE THE BOOK", "Lay risk off on the exchange with options and futures before the market runs."],
   ];
+  const [brief, setBrief] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_HTTP}/brief`)
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setBrief(d.brief); })
+      .catch(() => { if (!cancelled) setBrief(null); });
+    return () => { cancelled = true; };
+  }, []);
   return (
     <div className="flex-1 min-h-0 relative flex flex-col items-center justify-center gap-7 overflow-hidden">
       {/* champagne wash */}
@@ -1321,6 +1387,17 @@ function Briefing({ startSim }: { startSim: () => void }) {
         ))}
       </div>
 
+      {/* pre-sim brief — Claude-generated, once per server boot */}
+      {brief && (
+        <div
+          className="relative max-w-[620px] rounded-lg border border-tremor-border bg-tremor-background/40 px-6 py-4 flex flex-col gap-1.5 animate-rise"
+          style={{ animationDelay: "380ms" }}
+        >
+          <span className="text-[9px] uppercase tracking-[0.2em] font-bold text-tremor-brand">Desk Head {"·"} Morning Brief</span>
+          <p className="text-[12.5px] leading-relaxed text-tremor-content italic">{brief}</p>
+        </div>
+      )}
+
       <button
         onClick={startSim}
         className="relative font-mono text-[14px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-7 py-3 bg-tremor-brand/[0.06] transition-all duration-300 hover:bg-tremor-brand hover:text-tremor-brand-inverted hover:shadow-[0_0_32px_rgba(212,179,116,0.4)] cursor-pointer animate-rise"
@@ -1336,6 +1413,78 @@ function Briefing({ startSim }: { startSim: () => void }) {
       >
         {"←"} BACK TO THE LOBBY
       </Link>
+    </div>
+  );
+}
+
+// --- Post-session debrief overlay ---
+
+function Debrief({ data, onClose, onNewSession }: {
+  data: DebriefData; onClose: () => void; onNewSession: () => void;
+}) {
+  const p = data.portfolio;
+  const pnlPositive = p.total_pnl >= 0;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm p-6">
+      <div className="relative w-full max-w-[720px] max-h-[88vh] overflow-y-auto rounded-xl border border-tremor-border bg-tremor-background shadow-2xl">
+        <div
+          className="pointer-events-none absolute inset-0 rounded-xl"
+          style={{ background: "radial-gradient(ellipse 60% 40% at 50% 0%, rgba(212,179,116,0.08), transparent 70%)" }}
+        />
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-tremor-content-subtle hover:text-tremor-content-emphasis transition-colors cursor-pointer z-10"
+        >
+          <X size={18} />
+        </button>
+
+        <div className="relative flex flex-col gap-6 p-8">
+          <div className="flex flex-col items-center gap-1.5 text-center">
+            <span className="font-mono text-[11px] tracking-[0.28em] text-tremor-brand">SESSION COMPLETE</span>
+            <h2 className="text-[30px] font-bold tracking-tight text-tremor-content-strong">The book is closed for the hour.</h2>
+          </div>
+
+          {/* headline stats */}
+          <div className="grid grid-cols-4 divide-x divide-tremor-border rounded-lg border border-tremor-border bg-tremor-background/70">
+            {([
+              ["Total P&L", `${pnlPositive ? "+" : ""}£${p.total_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, pnlPositive ? "text-emerald-400" : "text-rose-400"],
+              ["Realised", `£${p.closed_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "text-tremor-content-strong"],
+              ["Unrealised", `£${p.unrealised_pnl.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "text-tremor-content-strong"],
+              ["Trades", `${data.tradeCount}`, "text-tremor-content-strong"],
+            ] as const).map(([k, v, cls]) => (
+              <div key={k} className="px-5 py-3.5 flex flex-col items-center gap-1.5">
+                <span className="text-[9px] uppercase tracking-[0.2em] font-bold text-tremor-content-subtle">{k}</span>
+                <span className={`font-mono text-[16px] tabular-nums whitespace-nowrap ${cls}`}>{v}</span>
+              </div>
+            ))}
+          </div>
+
+          <span className="text-center text-[11px] text-tremor-content-subtle">
+            {data.clientFills} client fill{data.clientFills === 1 ? "" : "s"} {"·"} {data.directTrades} direct trade{data.directTrades === 1 ? "" : "s"} {"·"} {p.positions.length} open position{p.positions.length === 1 ? "" : "s"} at close
+          </span>
+
+          {/* Claude debrief */}
+          <div className="rounded-lg border border-tremor-border bg-tremor-background/40 px-6 py-5 flex flex-col gap-2">
+            <span className="text-[9px] uppercase tracking-[0.2em] font-bold text-tremor-brand">Desk Head {"·"} Debrief</span>
+            <p className="text-[13px] leading-relaxed text-tremor-content italic whitespace-pre-line">{data.text}</p>
+          </div>
+
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={onClose}
+              className="font-mono text-[12px] tracking-[0.14em] text-tremor-content-subtle border border-tremor-border rounded-md px-5 py-2.5 hover:text-tremor-content-emphasis hover:border-tremor-content-subtle transition-colors cursor-pointer"
+            >
+              REVIEW THE DESK
+            </button>
+            <button
+              onClick={onNewSession}
+              className="font-mono text-[12px] tracking-[0.18em] text-tremor-brand border border-tremor-brand/40 rounded-md px-5 py-2.5 bg-tremor-brand/[0.06] transition-all duration-300 hover:bg-tremor-brand hover:text-tremor-brand-inverted cursor-pointer"
+            >
+              [ NEW SESSION {"→"} ]
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

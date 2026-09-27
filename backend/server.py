@@ -19,9 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from replay_engine import ReplayEngine
 from news_scheduler import NewsScheduler
-from contracts import build_menu, price_contract, liquidity_quote, contract_greeks, Contract, T_YEARS
+from contracts import build_menu, price_contract, liquidity_quote, contract_greeks, Contract, T_YEARS, DEFAULT_IV
 from portfolio import Portfolio, CONTRACT_SIZE
 from clients import seed_rfqs, evaluate_two_way, evaluate_unsolicited, maybe_spawn_rfq, qty_in_band, solicit_rfq, CLIENTS, RFQ, MAX_COUNTER_ROUNDS, apply_message, post_message, all_threads
+import desk_ai
 ROOT = Path(__file__).parent.parent
 DATA_DIR = ROOT / "data"
 NEWS_PATH = DATA_DIR / "news_timeline.json"
@@ -66,6 +67,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Pre-sim brief: the underlying data (spot/vol at sim start) is deterministic,
+# so this is generated once (lazily, on first request) and cached in memory
+# for the lifetime of the process rather than regenerated per session.
+_PRE_SIM_BRIEF: str | None = None
+
+
+def _build_pre_sim_brief() -> str:
+    engine = ReplayEngine(
+        data_dir=DATA_DIR, sim_duration_sec=SIM_DURATION_SEC,
+        tick_hz=TICK_HZ, data_time_scale=DATA_TIME_SCALE,
+    )
+    prices = engine.step(0).prices
+    lines = [
+        f"{ticker}: spot {px:,.4f}, {DEFAULT_IV.get(ticker, 0.25) * 100:.0f}% IV"
+        for ticker, px in sorted(prices.items())
+    ]
+    return desk_ai.build_pre_sim_brief(lines)
+
+
+@app.get("/brief")
+async def get_pre_sim_brief():
+    global _PRE_SIM_BRIEF
+    if _PRE_SIM_BRIEF is None:
+        _PRE_SIM_BRIEF = await asyncio.to_thread(_build_pre_sim_brief)
+    return {"brief": _PRE_SIM_BRIEF}
+
 
 class SimSession:
     def __init__(self):
@@ -94,6 +121,21 @@ class SimSession:
         self.tick_idx = 0
         self.sim_time = 0.0
         self.running = False
+        # Every filled trade (direct or client), for the post-sim debrief.
+        self.trade_log: list[dict] = []
+
+    def _log_trade(self, contract_id: str, quantity: int, price: float, mid: float, counterparty: str) -> None:
+        """quantity is signed from the DEALER's side: +ve = dealer bought, -ve = dealer sold."""
+        self.trade_log.append({
+            "sim_time": self.sim_time,
+            "contract_id": contract_id,
+            "side": "buy" if quantity > 0 else "sell",
+            "quantity": abs(quantity),
+            "price": price,
+            "mid": mid,
+            "edge": (mid - price) if quantity > 0 else (price - mid),
+            "counterparty": counterparty,
+        })
 
     def time_to_expiry(self) -> float:
         """Remaining time to expiry in years, shared by every contract on the
@@ -176,6 +218,7 @@ class SimSession:
         if not ok:
             return {"type": "error", "message": reason}
         note = self.portfolio.trade(contract, qty, fill)
+        self._log_trade(cid, qty, fill, quote["mid"], "direct")
         return {"type": "order_ack", "message": note, "fill": fill}
 
     def handle_quote(self, msg: dict) -> dict:
@@ -257,6 +300,7 @@ class SimSession:
                 return {"type": "client_result", "rfq_id": rfq_id, "accepted": False,
                         "message": f"Can't fill this \u2014 {reason}"}
             note = self.portfolio.trade(contract, dealer_qty, fill_price)
+            self._log_trade(contract.contract_id, dealer_qty, fill_price, mid, f"client:{rfq.client_name}")
             n = abs(dealer_qty)
             remaining = rfq.quantity - n   # reduced fills keep the RFQ open for the balance
             lifted = action.startswith("lifted")
@@ -422,6 +466,7 @@ class SimSession:
             return {"type": "client_result", "rfq_id": None, "accepted": False,
                     "message": f"Can't fill this — {reason}"}
         note = self.portfolio.trade(contract, dealer_qty, fill_price)
+        self._log_trade(contract.contract_id, dealer_qty, fill_price, mid, f"client:{client.name}")
         if not action.endswith("_partial"):
             # Full fill ends the negotiation; a partial keeps rounds so the cap can't be reset
             self.unsol_counters.pop(key, None)
@@ -522,6 +567,19 @@ async def ws_endpoint(websocket: WebSocket):
                     await asyncio.sleep(0.8)  # brief "reading" pause
                     result = await asyncio.to_thread(session.handle_client_message, msg)
                     await websocket.send_json(result)
+                elif msg.get("type") == "commentary_request":
+                    # Opt-in per-headline desk reaction — the frontend only sends this
+                    # when the trader has the commentary toggle on, so it never fires
+                    # (and never costs an API call) unless asked for.
+                    headline = str(msg.get("headline", ""))
+                    impact_hint = str(msg.get("impact_hint", ""))
+                    category = str(msg.get("category", ""))
+                    text = await asyncio.to_thread(
+                        desk_ai.build_headline_commentary, headline, impact_hint, category,
+                    )
+                    await websocket.send_json({
+                        "type": "commentary", "headline": headline, "text": text,
+                    })
         except WebSocketDisconnect:
             session.running = False
 
@@ -569,7 +627,23 @@ async def ws_endpoint(websocket: WebSocket):
 
             await asyncio.sleep(1.0 / TICK_HZ)
 
-        await websocket.send_json({"type": "sim_complete"})
+        final_snap = session.portfolio.mark_to_market(
+            session.contracts, session.current_prices, session.time_to_expiry(),
+        )
+        num_client_fills = sum(1 for t in session.trade_log if t["counterparty"].startswith("client:"))
+        num_direct_trades = sum(1 for t in session.trade_log if t["counterparty"] == "direct")
+        debrief = await asyncio.to_thread(
+            desk_ai.build_post_sim_debrief, final_snap, session.trade_log,
+            num_client_fills, num_direct_trades,
+        )
+        await websocket.send_json({
+            "type": "sim_complete",
+            "portfolio": final_snap,
+            "trade_count": len(session.trade_log),
+            "client_fills": num_client_fills,
+            "direct_trades": num_direct_trades,
+            "debrief": debrief,
+        })
     except WebSocketDisconnect:
         pass
     finally:
